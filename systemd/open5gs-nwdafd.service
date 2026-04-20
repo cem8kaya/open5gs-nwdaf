@@ -1,0 +1,20 @@
+[Unit]
+Description=Open5GS NWDAF - Network Data Analytics Function (3GPP TS 23.288)
+Documentation=https://open5gs.org https://github.com/cem8kaya/5g-ai-lab
+After=network.target open5gs-amfd.service open5gs-smfd.service
+Wants=open5gs-amfd.service open5gs-smfd.service
+
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/open5gs-nwdafd --config /etc/open5gs/nwdaf.yaml
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+User=root
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=open5gs-nwdafd
+WatchdogSec=30
+
+[Install]
+WantedBy=multi-user.target
