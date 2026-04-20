@@ -1,0 +1,6 @@
+build/
+*.o
+*.a
+*.so
+*.log
+/opt/nwdaf/
