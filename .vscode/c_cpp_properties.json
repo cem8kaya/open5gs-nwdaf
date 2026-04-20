@@ -1,0 +1,19 @@
+{
+  "configurations": [
+    {
+      "name": "Linux",
+      "includePath": [
+        "${workspaceFolder}/include/**",
+        "${workspaceFolder}/build/_deps/httplib-src",
+        "${workspaceFolder}/build/_deps/json-src/include",
+        "/usr/include/spdlog",
+        "/usr/include/mongocxx/v_noabi",
+        "/usr/include/bsoncxx/v_noabi"
+      ],
+      "compilerPath": "/usr/bin/g++",
+      "cppStandard": "c++17",
+      "intelliSenseMode": "linux-gcc-x64"
+    }
+  ],
+  "version": 4
+}
