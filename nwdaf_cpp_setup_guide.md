@@ -20,8 +20,8 @@
 5. [Clone and Initialise the Project](#5-clone-and-initialise-the-project)
 6. [Configure the Project](#6-configure-the-project)
 7. [Build](#7-build)
-8. [Run Unit Tests](#8-run-unit-tests)
-9. [Run Integration Tests](#9-run-integration-tests)
+8. [Run Unit & Integration Tests](#8-run-unit--integration-tests)
+9. [REST API Reference](#9-rest-api-reference)
 10. [Manual API Smoke Test](#10-manual-api-smoke-test)
 11. [VS Code Debugging](#11-vs-code-debugging)
 12. [Deploy to Open5GS Node](#12-deploy-to-open5gs-node)
@@ -141,8 +141,11 @@ pkg-config --modversion libsystemd
 
 ### 3.4 MongoDB C++ Driver (optional)
 
-MongoDB is used only for subscriber count. It is optional — if not installed,
-the build proceeds and `getSubscriberCount()` always returns 0.
+MongoDB is used only for subscriber count (queries the `subscribers` collection
+in the `open5gs` DB via UDR/UDM). It is optional — CMake detects mongocxx via
+`find_package(mongocxx QUIET)`. When found, it defines `NWDAF_HAS_MONGODB` and
+links `mongo::mongocxx_shared`. When absent, `getSubscriberCount()` always
+returns `0` and the build still succeeds.
 
 ```bash
 # Install libmongoc and libmongocxx
@@ -263,7 +266,9 @@ code .
 
 ### 6.1 Edit `config/nwdaf.yaml` for local development
 
-Open `config/nwdaf.yaml` and verify these settings for local dev:
+The shipped `config/nwdaf.yaml` is production-oriented (logs to
+`/var/log/open5gs/nwdaf.log`, registers with NRF on startup). For local dev,
+override the following keys:
 
 ```yaml
 nwdaf:
@@ -275,19 +280,40 @@ nwdaf:
   mongodb_uri: "mongodb://127.0.0.1:27017"
   nrf_register_on_startup: false  # Disable for local dev (no NRF available)
 
+  # ML knobs
+  model_dir: "/tmp/nwdaf_models"       # Isolation Forest JSON is cached here
+  anomaly_contamination: 0.10          # Expected anomaly fraction
+  anomaly_min_samples: 10              # Below this → INSUFFICIENT_DATA
+  baseline_stddev_min_kbps: 0.5        # Below this → BASELINE_TOO_LOW
+  ewma_alpha: 0.3                      # EWMA smoothing (0..1)
+
   log_level: "debug"
-  log_file: ""    # Empty = log to stdout only
+  log_file: ""    # Empty = console-only; spdlog silently skips file sink on failure
 ```
+
+The full config schema is defined in `include/nwdaf_config.hpp` — every key
+listed in `config/nwdaf.yaml` is consumed. Note that
+`throughput_history_size: 360` at a 10 s `collection_interval_seconds` retains
+**one hour** of throughput samples used by `ABNORMAL_BEHAVIOUR` and
+`QoS_SUSTAINABILITY`.
 
 ### 6.2 CMake configuration
 
-The project uses two key flags for local development:
+The project exposes two options (see `CMakeLists.txt`). **Both default to `ON`**
+— you must explicitly pass `-DNWDAF_USE_SD_JOURNAL=OFF` on a dev box that
+doesn't have a running Open5GS journald feed, otherwise the
+`libsystemd` dev headers become a hard requirement and (at runtime)
+`sd_journal_open` will just return empty lists.
 
-| Flag | Value for local dev | Value for Open5GS node |
-|---|---|---|
-| `NWDAF_USE_SD_JOURNAL` | `OFF` (use journalctl subprocess) | `ON` (use sd-journal API) |
-| `NWDAF_BUILD_TESTS` | `ON` | `ON` or `OFF` |
-| `CMAKE_BUILD_TYPE` | `Debug` | `Release` |
+| Flag | Default | Value for local dev | Value for Open5GS node |
+|---|---|---|---|
+| `NWDAF_USE_SD_JOURNAL` | `ON` | `OFF` (use `journalctl` subprocess) | `ON` (use sd-journal API + `sd_notify`) |
+| `NWDAF_BUILD_TESTS`    | `ON` | `ON` | `ON` or `OFF` |
+| `CMAKE_BUILD_TYPE`     | (none) | `Debug` | `Release` |
+
+MongoDB support is **not** controlled by an option — CMake probes for
+`mongocxx` via `find_package(mongocxx QUIET)` and, if present, defines the
+`NWDAF_HAS_MONGODB` compile macro used in `nwdaf_collector.cpp`.
 
 ---
 
@@ -353,7 +379,15 @@ Expected output:
 
 ---
 
-## 8. Run Unit Tests
+## 8. Run Unit & Integration Tests
+
+All unit tests and integration tests compile into a **single** Catch2 binary —
+`build/tests/nwdaf_tests`. `catch_discover_tests(nwdaf_tests)` registers every
+`TEST_CASE` as an individual `ctest` entry, so `ctest` will list many more
+than three files' worth of names.
+
+The integration test fixture boots the NWDAF SBI server on port **17779**
+(not 7779) inside the test process and issues real HTTP calls against it.
 
 ### Method A: VS Code CMake Tools
 
@@ -366,81 +400,137 @@ cd build
 ctest --output-on-failure --verbose
 ```
 
+Or run the Catch2 binary directly (much faster than ctest for dev):
+
+```bash
+./build/tests/nwdaf_tests                      # Run everything
+./build/tests/nwdaf_tests --list-tests         # List all test cases
+./build/tests/nwdaf_tests "IsolationForest*"   # Single test case
+./build/tests/nwdaf_tests -s                   # Show successful assertions too
+```
+
 ### Expected output
 
 ```
-Test project /path/to/open5gs-nwdaf/build
-    Start 1: TestCollector
-1/9 Test #1: TestCollector .............................   Passed    0.02 sec
-    Start 2: TestIsolationForest
-2/9 Test #2: TestIsolationForest .......................   Passed    0.15 sec
-    Start 3: TestEWMAPredictor
-3/9 Test #3: TestEWMAPredictor .........................   Passed    0.01 sec
-    Start 4: TestAnalytics_NfLoad
-4/9 Test #4: TestAnalytics_NfLoad ......................   Passed    0.02 sec
-    Start 5: TestAnalytics_AbnormalBehaviour
-5/9 Test #5: TestAnalytics_AbnormalBehaviour ...........   Passed    0.18 sec
-    Start 6: TestAnalytics_QosSustainability
-6/9 Test #6: TestAnalytics_QosSustainability ...........   Passed    0.03 sec
-    Start 7: TestAnalytics_NetworkPerformance
-7/9 Test #7: TestAnalytics_NetworkPerformance ..........   Passed    0.01 sec
-    Start 8: TestAnalytics_AllIds
-8/9 Test #8: TestAnalytics_AllIds ......................   Passed    0.04 sec
-    Start 9: TestSubscriptionStore
-9/9 Test #9: TestSubscriptionStore .....................   Passed    0.01 sec
-
-100% tests passed, 0 tests failed out of 9
+===============================================================================
+All tests passed (N assertions in 24 test cases)
 ```
 
-### Run a specific test
+The suite currently covers:
+
+| File | Test cases | Focus |
+|---|---|---|
+| `tests/test_collector.cpp` | 5 | Mock collector: AMF/SMF parsing, subscriber count, background thread, throughput sample fields |
+| `tests/test_analytics.cpp` | 9 | Seven analytics IDs + `IsolationForest` outlier scoring + `EwmaPredictor` lag |
+| `tests/test_server_integration.cpp` | 10 | HTTP: `/health`, `/analytics`, `/subscriptions` CRUD, all 7 analytics IDs, `/train` |
+
+### Filter tests by prefix
+
+ctest matches against the Catch2 test-case name, so use the human-readable
+prefixes rather than file names:
 
 ```bash
-# Run only the Isolation Forest test
-cd build && ctest -R TestIsolationForest --output-on-failure
-
-# Run with verbose Catch2 output
-./build/tests/nwdaf_tests "[isolation_forest]" -v
+cd build
+ctest -R "Integration:"              --output-on-failure   # server integration only
+ctest -R "IsolationForest"           --output-on-failure   # anomaly model only
+ctest -R "EwmaPredictor"             --output-on-failure   # EWMA only
+ctest -R "MockCollector:"            --output-on-failure   # collector mocks only
+ctest -R "ABNORMAL_BEHAVIOUR"        --output-on-failure   # abnormal behaviour scenarios
 ```
 
 ---
 
-## 9. Run Integration Tests
+### What the integration tests verify
 
-Integration tests start the NWDAF server on port 17779 (not 7779) and issue
-real HTTP requests against it.
+| # | Catch2 case | Asserts |
+|---|---|---|
+| 1 | `Integration: GET /health returns 200 UP` | `status == "UP"` |
+| 2 | `Integration: GET /analytics?analyticsId=NF_LOAD returns 200` | HTTP 200, `analData.nfLoadLevelList` present |
+| 3 | `Integration: GET /analytics without param returns 400` | HTTP 400 |
+| 4 | `Integration: GET /analytics?analyticsId=INVALID returns 422` | HTTP 422 |
+| 5 | `Integration: POST /subscriptions ...` | HTTP 201, body has `subId` |
+| 6 | `Integration: GET /subscriptions/<subId> returns 200` | HTTP 200, `subId` echoed |
+| 7 | `Integration: DELETE /subscriptions/<subId> returns 204` | HTTP 204 |
+| 8 | `Integration: GET /subscriptions/<subId> after delete returns 404` | HTTP 404 |
+| 9 | `Integration: All 7 analytics IDs return 200 with correct analyticsId` | For every ID: HTTP 200, `analyticsId` field matches |
+| 10 | `Integration: POST /train returns 200` | HTTP 200 |
 
-```bash
-cd build
-ctest -R TestServerIntegration --output-on-failure
+---
+
+## 9. REST API Reference
+
+All endpoints are rooted at `/nwdaf-analytics/v1` and speak JSON. The SBI
+server is `cpp-httplib` (HTTP/1.1 plaintext — no TLS; if you need mTLS, place
+it behind a reverse proxy).
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`    | `/health` | Liveness + NF identity |
+| `GET`    | `/analytics?analyticsId=<ID>&supi=&startTs=&endTs=` | Nnwdaf_AnalyticsInfo (TS 29.520 §5.2) |
+| `POST`   | `/subscriptions` | Create Nnwdaf_EventsSubscription (§5.3) |
+| `GET`    | `/subscriptions` | List all active subscriptions |
+| `GET`    | `/subscriptions/{subId}` | Fetch one |
+| `DELETE` | `/subscriptions/{subId}` | Terminate one |
+| `POST`   | `/train` | Force-retrain the Isolation Forest on current throughput history |
+
+### Analytics response envelope
+
+`GET /analytics` wraps the per-analytics payload in a 3GPP-style envelope:
+
+```json
+{
+  "analyticsId":  "NF_LOAD",
+  "requestTime":  "2026-04-21T09:12:03Z",
+  "timeStampGen": "2026-04-21T09:12:03Z",
+  "validity":     60,
+  "confidence":   90,
+  "analData":     { "...": "per-analytics payload below" }
+}
 ```
 
-Or run directly:
+The seven payload shapes under `analData` are defined in
+`src/nwdaf_analytics.cpp`:
 
-```bash
-./build/tests/nwdaf_integration_tests
+| analyticsId | Key fields in `analData` |
+|---|---|
+| `NF_LOAD` | `nfLoadLevelList[]`, `overloadedNfs[]`, `recommendation` (`STABLE` / `SCALE_OUT`) |
+| `UE_MOBILITY` | `registrationCount`, `deregistrationCount`, `handoverCount`, `authFailureCount`, `mobilityPattern` (`LOW`/`HIGH`) |
+| `UE_COMMUNICATION` | `pduSessionEstCount`, `pduSessionRelCount`, `activePduSessions`, `totalSubscribers`, `currentDlKbps`, `currentUlKbps` |
+| `ABNORMAL_BEHAVIOUR` | `anomalyDetected`, `anomalyType`, `anomalyPct`, `anomalyIndices`, `avgAnomalyScore`, `baselineDlStd`, `reason` (when gated) |
+| `QoS_SUSTAINABILITY` | `currentDlKbps`, `predictedDlKbps`, `dlTrend`, `ulTrend`, `violationRisk` (`LOW`/`MEDIUM`/`HIGH`) |
+| `SERVICE_EXPERIENCE` | `mosScore`, `mosCategory` (`POOR`..`EXCELLENT`), `activeSessionRatio` |
+| `NETWORK_PERFORMANCE` | `overallScore`, `scoreLabel`, `components.{nfHealthScore,dlScore,pduScore}` |
+
+### Subscription request body
+
+`POST /subscriptions` accepts:
+
+```json
+{
+  "analyticsId":  "NF_LOAD",            // REQUIRED
+  "notifUri":     "http://.../callback",// REQUIRED
+  "notifId":      "my-corr-id",         // optional
+  "repPeriod":    60,                   // optional (seconds, default 60)
+  "maxReportNbr": 0                     // optional (0 = unlimited)
+}
 ```
 
-Expected output:
+Only `analyticsId` and `notifUri` are validated; missing either returns
+HTTP 400. The response is HTTP 201 with body:
 
+```json
+{
+  "subId":       "sub-<16 hex>",
+  "analyticsId": "NF_LOAD",
+  "notifUri":    "http://.../callback",
+  "status":      "ACTIVE",
+  "createdAt":   "2026-04-21T09:12:03Z"
+}
 ```
-===============================================================================
-All tests passed (10 assertions in 10 test cases)
-```
 
-### What these tests verify
-
-| # | Test | Asserts |
-|---|------|---------|
-| 1 | Health endpoint | `status == "UP"`, has `nfProfile` |
-| 2 | NF_LOAD | HTTP 200, has `nfLoadLevelList` array |
-| 3 | Missing analyticsId | HTTP 400 |
-| 4 | Invalid analyticsId | HTTP 422 |
-| 5 | Create subscription | HTTP 201, has `subId` |
-| 6 | Get subscription | HTTP 200, matches created |
-| 7 | Delete subscription | HTTP 204 |
-| 8 | Get deleted subscription | HTTP 404 |
-| 9 | All 7 Analytics IDs | HTTP 200 each, `analyticsId` field correct |
-| 10 | Train endpoint | HTTP 200 |
+> **Implementation note**: The subscription store is currently in-process
+> only (no outbound push delivery). That matches the 3GPP compliance table
+> in the Quick Reference: store ✅, push ⚠️.
 
 ---
 
@@ -452,13 +542,19 @@ Start the NWDAF in a terminal:
 ./build/open5gs-nwdafd --config config/nwdaf.yaml
 ```
 
-You should see:
+You should see (exact strings from `src/main.cpp` / `src/nwdaf_server.cpp`):
 
 ```
-[2026-04-20 12:00:00.123] [nwdaf] [info] NWDAF starting — 3GPP TS 23.288/29.520 v17
-[2026-04-20 12:00:00.124] [nwdaf] [info] Background collection thread started (10s interval)
-[2026-04-20 12:00:00.125] [nwdaf] [info] Listening on 127.0.0.1:7779
+[2026-04-21 12:00:00.123] [nwdaf] [info] Open5GS NWDAF starting (instance: <uuid>)
+[2026-04-21 12:00:00.124] [nwdaf] [warn] NRF registration failed (status -1)   # only if nrf_register_on_startup=true and NRF is down
+[2026-04-21 12:00:00.125] [nwdaf] [info] NWDAF SBI server starting on 127.0.0.1:7779
+[2026-04-21 12:00:00.125] [nwdaf] [info] NWDAF ready on 127.0.0.1:7779
 ```
+
+When built with `-DNWDAF_USE_SD_JOURNAL=ON` and launched under systemd, the
+binary additionally calls `sd_notify(READY=1)` (Type=notify) and `STOPPING=1`
+on shutdown — this is what the packaged `systemd/open5gs-nwdafd.service`
+relies on.
 
 Open a **second terminal** and run these smoke tests:
 
@@ -468,23 +564,21 @@ Open a **second terminal** and run these smoke tests:
 curl -s http://localhost:7779/nwdaf-analytics/v1/health | python3 -m json.tool
 ```
 
-Expected:
+Expected (from `handleHealth()` in `src/nwdaf_server.cpp:73`):
 ```json
 {
-    "status": "UP",
-    "nfProfile": {
-        "nfType": "NWDAF",
-        "nfStatus": "REGISTERED",
-        "nwdafInfo": {
-            "analyticsIds": ["NF_LOAD", "UE_MOBILITY", ...]
-        }
-    },
-    "timestamp": "...",
-    "throughputHistoryLen": 0
+    "status":       "UP",
+    "nfType":       "NWDAF",
+    "nfInstanceId": "<uuid>",
+    "ts":           "2026-04-21T09:12:03Z"
 }
 ```
 
 ### Query all 7 Analytics IDs
+
+Note the mixed-case `QoS_SUSTAINABILITY` — the validator in
+`NwdafAnalyticsEngine::VALID_ANALYTICS_IDS` is case-sensitive, so
+`QOS_SUSTAINABILITY` will return **HTTP 422**.
 
 ```bash
 for ID in NF_LOAD UE_MOBILITY UE_COMMUNICATION ABNORMAL_BEHAVIOUR \
@@ -496,25 +590,36 @@ for ID in NF_LOAD UE_MOBILITY UE_COMMUNICATION ABNORMAL_BEHAVIOUR \
 done
 ```
 
+Optional filters supported by `GET /analytics`:
+
+| Query param | Used by | Behaviour |
+|---|---|---|
+| `supi=imsi-<15 digits>` | `UE_MOBILITY` | Filters AMF events to one subscriber; other IDs ignore it |
+| `startTs`, `endTs` | Reserved | Accepted but not yet applied to the window — present for 3GPP conformance |
+
 ### Subscription lifecycle
 
 ```bash
-# Create subscription
+# Create subscription (only analyticsId + notifUri are required)
 SUB=$(curl -s -X POST http://localhost:7779/nwdaf-analytics/v1/subscriptions \
     -H "Content-Type: application/json" \
-    -d '{"analyticsId":"NF_LOAD","notifUri":"http://localhost:9000/notify","notifId":"test-1"}')
+    -d '{"analyticsId":"NF_LOAD","notifUri":"http://localhost:9000/notify","repPeriod":30}')
 echo $SUB | python3 -m json.tool
 
 # Extract subId
 SUB_ID=$(echo $SUB | python3 -c "import sys,json; print(json.load(sys.stdin)['subId'])")
 
-# Get subscription
+# List all subscriptions
+curl -s http://localhost:7779/nwdaf-analytics/v1/subscriptions | python3 -m json.tool
+
+# Get one subscription
 curl -s http://localhost:7779/nwdaf-analytics/v1/subscriptions/$SUB_ID | python3 -m json.tool
 
-# Delete subscription
-curl -s -X DELETE http://localhost:7779/nwdaf-analytics/v1/subscriptions/$SUB_ID
-echo "Deleted: HTTP $(curl -s -o /dev/null -w '%{http_code}' -X DELETE \
-    http://localhost:7779/nwdaf-analytics/v1/subscriptions/$SUB_ID)"
+# Delete subscription → 204 on success, 404 on second attempt
+curl -s -o /dev/null -w "Delete 1: HTTP %{http_code}\n" \
+    -X DELETE http://localhost:7779/nwdaf-analytics/v1/subscriptions/$SUB_ID
+curl -s -o /dev/null -w "Delete 2: HTTP %{http_code}\n" \
+    -X DELETE http://localhost:7779/nwdaf-analytics/v1/subscriptions/$SUB_ID
 ```
 
 ### Error handling
@@ -542,8 +647,9 @@ curl -s -X POST http://localhost:7779/nwdaf-analytics/v1/train | python3 -m json
 ### Debug the main NWDAF binary
 
 1. Open VS Code in the project root
-2. Set a breakpoint — e.g., in `src/nwdaf_analytics.cpp` in the `_nf_load()`
-   function (click the gutter to the left of the line number)
+2. Set a breakpoint — e.g., in `src/nwdaf_analytics.cpp` in the
+   `NwdafAnalyticsEngine::nfLoad()` function (click the gutter to the left of
+   the line number)
 3. Press `F5` (or go to Run → Start Debugging)
 4. Select the **"Debug NWDAF"** configuration
 5. VS Code will build, launch the binary, and stop at your breakpoint
@@ -609,6 +715,13 @@ sudo chown -R $(whoami):$(whoami) /opt/nwdaf
 sudo cp systemd/open5gs-nwdafd.service /etc/systemd/system/
 sudo systemctl daemon-reload
 ```
+
+> **Type=notify**: The unit file uses `Type=notify` with `WatchdogSec=30` and
+> expects the daemon to call `sd_notify(READY=1)`. This path is only compiled
+> in when `-DNWDAF_USE_SD_JOURNAL=ON` (see `src/main.cpp:117`). If you build
+> without sd-journal support and drop the binary behind this unit, systemd
+> will time out the startup — either flip the build option back on or edit
+> the unit to `Type=simple` and remove `WatchdogSec`.
 
 ### 12.3 Adapt `nwdaf.yaml` for your Open5GS deployment
 
@@ -725,25 +838,27 @@ sudo lsof -i :7779
 
 ### Integration tests fail: `Connection refused`
 
-The integration test starts the server internally — this error usually means
-a previous test run left the server running. Check:
+The integration-test fixture boots the server in-process on port 17779, so
+`Connection refused` usually means a previous test run left a stray
+`open5gs-nwdafd` or another ServerFixture on that port. Check:
 
 ```bash
-pkill open5gs-nwdafd   # Kill any stray process
-# Re-run tests
-cd build && ctest -R TestServerIntegration --output-on-failure
+pkill open5gs-nwdafd        # Kill any stray production binary
+sudo lsof -i :17779         # Anything still on the test port?
+cd build && ctest -R "Integration:" --output-on-failure
 ```
 
 ### ABNORMAL_BEHAVIOUR always returns `BASELINE_TOO_LOW`
 
-This is expected on a development machine with no UE traffic. The guard is
-intentional (prevents false positives on idle data). To test the anomaly
-detection engine:
+This is expected on a development machine with no UE traffic. The guard
+(controlled by `baseline_stddev_min_kbps` in the config) prevents false
+positives on idle data. To exercise the anomaly detection engine directly:
 
 ```bash
-# The mock test in test_analytics.cpp injects synthetic spike data.
-# Run it to verify the algorithm works:
-./build/tests/nwdaf_tests "[abnormal_behaviour]" -v
+# The mock tests in test_analytics.cpp inject synthetic traffic.
+# Match the Catch2 case names (no tag brackets — they are not tagged):
+./build/tests/nwdaf_tests "ABNORMAL_BEHAVIOUR*"     # All 3 ABNORMAL cases
+./build/tests/nwdaf_tests "IsolationForest*" -s     # Deterministic IF check
 ```
 
 ### On Open5GS node: NF metrics all show `unknown`
@@ -795,10 +910,13 @@ cd build && ctest --output-on-failure
 # Health
 curl -s http://localhost:7779/nwdaf-analytics/v1/health
 
-# All analytics
+# All analytics — show HTTP status and confidence from the envelope
 for ID in NF_LOAD UE_MOBILITY UE_COMMUNICATION ABNORMAL_BEHAVIOUR \
           QoS_SUSTAINABILITY SERVICE_EXPERIENCE NETWORK_PERFORMANCE; do
-    echo "[$ID] $(curl -s "http://localhost:7779/nwdaf-analytics/v1/analytics?analyticsId=$ID" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("analData",{}).get("recommendation","ok"))')"
+    CODE=$(curl -s -o /tmp/_nwdaf.json -w '%{http_code}' \
+        "http://localhost:7779/nwdaf-analytics/v1/analytics?analyticsId=$ID")
+    CONF=$(python3 -c 'import sys,json; print(json.load(open("/tmp/_nwdaf.json")).get("confidence","?"))')
+    echo "[$ID] HTTP=$CODE confidence=$CONF"
 done
 ```
 
@@ -807,10 +925,12 @@ done
 | Specification | Feature | Status |
 |---|---|---|
 | TS 23.288 Table 2.1-1 | All 7 Analytics IDs | ✅ |
-| TS 29.520 §5.2 | Nnwdaf_AnalyticsInfo (GET) | ✅ |
-| TS 29.520 §5.3 | Nnwdaf_EventsSubscription (CRUD) | ✅ Store; ⚠️ no push delivery |
-| TS 29.510 §5.2.2 | NRF NFRegister | ✅ One-shot on startup |
-| TS 28.554 | KPI collection via /sys counters | ✅ |
+| TS 29.520 §5.2 | Nnwdaf_AnalyticsInfo (GET + envelope) | ✅ |
+| TS 29.520 §5.3 | Nnwdaf_EventsSubscription CRUD + list | ✅ Store; ⚠️ no push delivery |
+| TS 29.510 §5.2.2 | NRF NFRegister (PUT /nf-instances/{id}) | ✅ One-shot on startup |
+| TS 28.554 | KPI collection via `/sys/class/net` counters | ✅ |
+| systemd | `Type=notify` + `WatchdogSec` readiness | ✅ when built with `NWDAF_USE_SD_JOURNAL=ON` |
+| ML | Isolation Forest (anomaly) + EWMA (QoS forecast) | ✅ persisted to `model_dir` as JSON |
 
 ---
 
