@@ -33,6 +33,85 @@ std::string NwdafAnalyticsEngine::nowISO() const {
     return buf;
 }
 
+// ── COMP-04: time window helpers ──────────────────────────────────────────────
+
+std::chrono::system_clock::time_point NwdafAnalyticsEngine::parseISO(const std::string& ts) {
+    struct tm tm_buf = {};
+    // Accept "2024-04-21T10:00:00Z" (UTC suffix)
+    const char* end = strptime(ts.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
+    if (!end) strptime(ts.c_str(), "%Y-%m-%dT%H:%M:%S", &tm_buf);
+    return std::chrono::system_clock::from_time_t(timegm(&tm_buf));
+}
+
+bool NwdafAnalyticsEngine::inWindow(const std::string& event_ts,
+                                    const std::string& start_ts,
+                                    const std::string& end_ts) {
+    if (start_ts.empty() && end_ts.empty()) return true;
+    if (event_ts.empty()) return true; // no timestamp on event — include it
+    auto ev_tp = parseISO(event_ts);
+    if (!start_ts.empty() && ev_tp < parseISO(start_ts)) return false;
+    if (!end_ts.empty()   && ev_tp > parseISO(end_ts))   return false;
+    return true;
+}
+
+std::vector<ThroughputSample> NwdafAnalyticsEngine::filterByWindow(
+    const std::vector<ThroughputSample>& hist,
+    const std::string& start_ts,
+    const std::string& end_ts)
+{
+    if (start_ts.empty() && end_ts.empty()) return hist;
+    std::vector<ThroughputSample> out;
+    for (const auto& s : hist)
+        if (inWindow(s.timestamp_iso, start_ts, end_ts)) out.push_back(s);
+    return out;
+}
+
+std::vector<AmfEvent> NwdafAnalyticsEngine::filterAmfByWindow(
+    const std::vector<AmfEvent>& events,
+    const std::string& start_ts,
+    const std::string& end_ts)
+{
+    if (start_ts.empty() && end_ts.empty()) return events;
+    std::vector<AmfEvent> out;
+    for (const auto& e : events)
+        if (inWindow(e.timestamp_iso, start_ts, end_ts)) out.push_back(e);
+    return out;
+}
+
+std::vector<SmfEvent> NwdafAnalyticsEngine::filterSmfByWindow(
+    const std::vector<SmfEvent>& events,
+    const std::string& start_ts,
+    const std::string& end_ts)
+{
+    if (start_ts.empty() && end_ts.empty()) return events;
+    std::vector<SmfEvent> out;
+    for (const auto& e : events)
+        if (inWindow(e.timestamp_iso, start_ts, end_ts)) out.push_back(e);
+    return out;
+}
+
+// ── COMP-03: SUPI filter helpers ──────────────────────────────────────────────
+
+std::vector<AmfEvent> NwdafAnalyticsEngine::filterAmfBySupi(
+    const std::vector<AmfEvent>& events, const std::string& supi)
+{
+    if (supi.empty()) return events;
+    std::vector<AmfEvent> out;
+    std::copy_if(events.begin(), events.end(), std::back_inserter(out),
+                 [&](const AmfEvent& e){ return e.supi == supi; });
+    return out;
+}
+
+std::vector<SmfEvent> NwdafAnalyticsEngine::filterSmfBySupi(
+    const std::vector<SmfEvent>& events, const std::string& supi)
+{
+    if (supi.empty()) return events;
+    std::vector<SmfEvent> out;
+    std::copy_if(events.begin(), events.end(), std::back_inserter(out),
+                 [&](const SmfEvent& e){ return e.supi == supi; });
+    return out;
+}
+
 void NwdafAnalyticsEngine::loadModels() {
     std::string path = config_.model_dir + "/isolation_forest.json";
     try {
@@ -99,7 +178,9 @@ json NwdafAnalyticsEngine::compute(const std::string& analytics_id,
 
 // ── NF_LOAD ───────────────────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::nfLoad(const std::string&, const std::string&, const std::string&) {
+json NwdafAnalyticsEngine::nfLoad(const std::string&,
+                                   const std::string&,
+                                   const std::string&) {
     auto metrics = collector_.getCachedNfMetrics();
     if (metrics.empty()) metrics = collector_.collectNfLoad();
 
@@ -136,12 +217,14 @@ json NwdafAnalyticsEngine::nfLoad(const std::string&, const std::string&, const 
 
 // ── UE_MOBILITY ───────────────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::ueMobility(const std::string& supi, const std::string&, const std::string&) {
-    auto events = collector_.getRecentAmfEvents(500);
+json NwdafAnalyticsEngine::ueMobility(const std::string& supi,
+                                       const std::string& start_ts,
+                                       const std::string& end_ts) {
+    auto events = filterAmfByWindow(collector_.getRecentAmfEvents(500), start_ts, end_ts);
+    events = filterAmfBySupi(events, supi);
 
     int reg = 0, dereg = 0, handover = 0, auth_fail = 0;
     for (const auto& e : events) {
-        if (!supi.empty() && e.supi != supi) continue;
         if      (e.event_type == "REGISTRATION")   ++reg;
         else if (e.event_type == "DEREGISTRATION") ++dereg;
         else if (e.event_type == "HANDOVER")        ++handover;
@@ -165,8 +248,13 @@ json NwdafAnalyticsEngine::ueMobility(const std::string& supi, const std::string
 
 // ── UE_COMMUNICATION ─────────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::ueCommunication(const std::string&, const std::string&, const std::string&) {
-    auto smf = collector_.getRecentSmfEvents(500);
+json NwdafAnalyticsEngine::ueCommunication(const std::string& supi,
+                                            const std::string& start_ts,
+                                            const std::string& end_ts) {
+    // COMP-03: filter by SUPI; COMP-04: filter by time window
+    auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
+    smf = filterSmfBySupi(smf, supi);
+
     int established = 0, released = 0;
     for (const auto& e : smf) {
         if      (e.event_type == "PDU_ESTABLISHED") ++established;
@@ -174,13 +262,15 @@ json NwdafAnalyticsEngine::ueCommunication(const std::string&, const std::string
     }
     int active = std::max(0, established - released);
 
-    auto hist = collector_.getThroughputHistory(1);
+    auto hist = filterByWindow(collector_.getThroughputHistory(1), start_ts, end_ts);
     double dl_kbps = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
     double ul_kbps = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
 
-    int subscribers = collector_.getSubscriberCount();
+    // When SUPI filter active, subscriber count is per-UE (1 if SUPI seen, else 0)
+    int subscribers = supi.empty() ? collector_.getSubscriberCount()
+                                   : (!smf.empty() ? 1 : 0);
 
-    return {
+    json result = {
         {"analyticsId",      "UE_COMMUNICATION"},
         {"ts",               nowISO()},
         {"pduSessionEstCount", established},
@@ -191,12 +281,44 @@ json NwdafAnalyticsEngine::ueCommunication(const std::string&, const std::string
         {"currentUlKbps",      ul_kbps},
         {"confidence",         88}
     };
+    if (!supi.empty()) result["supi"] = supi;
+    return result;
 }
 
 // ── ABNORMAL_BEHAVIOUR ────────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::abnormalBehaviour(const std::string&, const std::string&, const std::string&) {
-    auto hist = collector_.getThroughputHistory(360);
+json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
+                                              const std::string& start_ts,
+                                              const std::string& end_ts) {
+    // COMP-03: per-UE mode — use SMF event pattern analysis when SUPI is specified.
+    // Network-wide throughput (gtp5g) cannot be decomposed per-UE, so we fall back to
+    // SMF session-behaviour heuristics in this path.
+    if (!supi.empty()) {
+        auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
+        smf = filterSmfBySupi(smf, supi);
+        int est = 0, rel = 0;
+        for (const auto& e : smf) {
+            if      (e.event_type == "PDU_ESTABLISHED") ++est;
+            else if (e.event_type == "PDU_RELEASED")    ++rel;
+        }
+        // Heuristic: rapid-fire PDU establishment or asymmetric est/rel ratio is suspicious
+        bool anomaly = (est > 10) || (est > 0 && rel == 0 && est > 3);
+        return {
+            {"analyticsId",    "ABNORMAL_BEHAVIOUR"},
+            {"ts",             nowISO()},
+            {"supi",           supi},
+            {"anomalyDetected", anomaly},
+            {"anomalyType",    anomaly ? "UNEXPECTED_WAKEUP" : "NONE"},
+            {"pduEstCount",    est},
+            {"pduRelCount",    rel},
+            {"dataPoints",     (int)smf.size()},
+            {"note",           "Per-UE mode: SMF event heuristic "
+                               "(aggregate throughput not decomposable per gtp5g constraint)"},
+            {"confidence",     65}
+        };
+    }
+
+    auto hist = filterByWindow(collector_.getThroughputHistory(360), start_ts, end_ts);
     int n = (int)hist.size();
 
     if (n < config_.anomaly_min_samples) {
@@ -293,10 +415,12 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string&, const std::stri
 
 // ── QoS_SUSTAINABILITY ────────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::qosSustainability(const std::string&, const std::string&, const std::string&) {
+json NwdafAnalyticsEngine::qosSustainability(const std::string& supi,
+                                              const std::string& start_ts,
+                                              const std::string& end_ts) {
     // BUG-02: EWMA state is updated solely in NwdafCollector::bgLoop.
     // Read predictions here without mutating shared state — makes this call idempotent.
-    auto hist = collector_.getThroughputHistory(1);
+    auto hist = filterByWindow(collector_.getThroughputHistory(1), start_ts, end_ts);
     double cur_dl = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
     double cur_ul = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
 
@@ -318,7 +442,7 @@ json NwdafAnalyticsEngine::qosSustainability(const std::string&, const std::stri
     if      (pred_dl < 10)  violation_risk = "HIGH";
     else if (pred_dl < 50)  violation_risk = "MEDIUM";
 
-    return {
+    json result = {
         {"analyticsId",   "QoS_SUSTAINABILITY"},
         {"ts",            nowISO()},
         {"currentDlKbps", cur_dl},
@@ -330,12 +454,24 @@ json NwdafAnalyticsEngine::qosSustainability(const std::string&, const std::stri
         {"violationRisk",  violation_risk},
         {"confidence",     80}
     };
+
+    // COMP-03: per-UE throughput unavailable (gtp5g network-wide only) — signal this
+    if (!supi.empty()) {
+        result["supi"]         = supi;
+        result["supiFiltered"] = false;
+        result["note"] = "Per-UE QoS prediction not available: throughput is measured "
+                         "network-wide via /sys/class/net (gtp5g constraint); "
+                         "returning aggregate EWMA.";
+    }
+    return result;
 }
 
 // ── SERVICE_EXPERIENCE ────────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::serviceExperience(const std::string&, const std::string&, const std::string&) {
-    auto hist = collector_.getThroughputHistory(1);
+json NwdafAnalyticsEngine::serviceExperience(const std::string& supi,
+                                              const std::string& start_ts,
+                                              const std::string& end_ts) {
+    auto hist = filterByWindow(collector_.getThroughputHistory(1), start_ts, end_ts);
     double dl_kbps = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
     double ul_kbps = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
 
@@ -350,18 +486,21 @@ json NwdafAnalyticsEngine::serviceExperience(const std::string&, const std::stri
     else if (mos > 3.5) category = "GOOD";
     else if (mos > 2.5) category = "FAIR";
 
-    // active session ratio
-    auto smf = collector_.getRecentSmfEvents(500);
+    // COMP-03: filter SMF events by SUPI and time window for per-UE session ratio
+    auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
+    smf = filterSmfBySupi(smf, supi);
+
     int est = 0, rel = 0;
     for (const auto& e : smf) {
         if      (e.event_type == "PDU_ESTABLISHED") ++est;
         else if (e.event_type == "PDU_RELEASED")    ++rel;
     }
     int active = std::max(0, est - rel);
-    int subscribers = collector_.getSubscriberCount();
+    int subscribers = supi.empty() ? collector_.getSubscriberCount()
+                                   : (!smf.empty() ? 1 : 0);
     double ratio = (subscribers > 0) ? (double)active / subscribers : 0.0;
 
-    return {
+    json result = {
         {"analyticsId",      "SERVICE_EXPERIENCE"},
         {"ts",               nowISO()},
         {"mosScore",         mos},
@@ -371,11 +510,15 @@ json NwdafAnalyticsEngine::serviceExperience(const std::string&, const std::stri
         {"activeSessionRatio", ratio},
         {"confidence",       75}
     };
+    if (!supi.empty()) result["supi"] = supi;
+    return result;
 }
 
 // ── NETWORK_PERFORMANCE ───────────────────────────────────────────────────────
 
-json NwdafAnalyticsEngine::networkPerformance(const std::string&, const std::string&, const std::string&) {
+json NwdafAnalyticsEngine::networkPerformance(const std::string&,
+                                               const std::string& start_ts,
+                                               const std::string& end_ts) {
     auto metrics = collector_.getCachedNfMetrics();
     if (metrics.empty()) metrics = collector_.collectNfLoad();
 
@@ -386,10 +529,10 @@ json NwdafAnalyticsEngine::networkPerformance(const std::string&, const std::str
 
     double nf_health = total_nf > 0 ? 100.0 * active_nf / total_nf : 0.0;
 
-    auto hist = collector_.getThroughputHistory(1);
+    auto hist = filterByWindow(collector_.getThroughputHistory(1), start_ts, end_ts);
     double dl_kbps = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
 
-    auto smf = collector_.getRecentSmfEvents(500);
+    auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
     int est = 0, rel = 0;
     for (const auto& e : smf) {
         if      (e.event_type == "PDU_ESTABLISHED") ++est;

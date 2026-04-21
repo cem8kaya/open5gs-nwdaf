@@ -14,6 +14,7 @@ struct Subscription {
     std::string notif_id;
     int         rep_period_seconds;
     int         max_report_nbr;
+    int         report_count = 0;   // incremented by NwdafNotifier on each successful delivery
     std::string created_at_iso;
     std::string status;
 };
@@ -26,6 +27,8 @@ public:
     bool                      remove(const std::string& sub_id);
     std::vector<Subscription> listAll() const;
     int                       count() const;
+    // Atomically increment report_count; returns new count, or -1 if not found
+    int                       incrementReportCount(const std::string& sub_id);
 
 private:
     mutable std::mutex                            mutex_;

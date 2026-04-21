@@ -27,6 +27,7 @@ struct AmfEvent {
 
 struct SmfEvent {
     std::string event_type;
+    std::string supi;
     std::string raw_line;
     std::string timestamp_iso;
 };

@@ -12,6 +12,11 @@
 #include <atomic>
 #include <string>
 #include <iostream>
+#include <thread>
+
+#ifdef NWDAF_ENABLE_PUSH_DELIVERY
+#include "nwdaf_notifier.hpp"
+#endif
 
 #ifdef NWDAF_USE_SD_JOURNAL
 #include <systemd/sd-daemon.h>
@@ -114,12 +119,53 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    // COMP-01: subscription push delivery notifier
+#ifdef NWDAF_ENABLE_PUSH_DELIVERY
+    NwdafNotifier notifier(subs, engine);
+    notifier.start();
+#endif
+
+    // COMP-02: NRF heartbeat thread (TS 29.510 §5.3.2.4)
+    std::thread nrf_hb_thread;
+    if (config.nrf_register_on_startup && config.nrf_heartbeat_interval_seconds > 0) {
+        nrf_hb_thread = std::thread([&config]() {
+            int elapsed = 0;
+            while (!g_shutdown) {
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+                if (g_shutdown) break;
+                if (++elapsed < config.nrf_heartbeat_interval_seconds) continue;
+                elapsed = 0;
+                try {
+                    httplib::Client cli(config.nrf_uri);
+                    cli.set_connection_timeout(3);
+                    nlohmann::json patch = {{"nfStatus", "REGISTERED"}};
+                    auto res = cli.Patch(
+                        "/nnrf-nfm/v1/nf-instances/" + config.nf_instance_id,
+                        patch.dump(), "application/merge-patch+json");
+                    if (!res || (res->status != 200 && res->status != 204)) {
+                        spdlog::warn("NRF heartbeat failed ({}), re-registering",
+                                     res ? res->status : -1);
+                        registerWithNrf(config);
+                    }
+                } catch (const std::exception& e) {
+                    spdlog::warn("NRF heartbeat exception: {}", e.what());
+                }
+            }
+        });
+    }
+
 #ifdef NWDAF_USE_SD_JOURNAL
     sd_notify(0, "READY=1");
 #endif
 
     spdlog::info("NWDAF ready on {}:{}", config.sbi_bind_address, config.sbi_port);
     server.start(); // blocking
+
+#ifdef NWDAF_ENABLE_PUSH_DELIVERY
+    notifier.stop();
+#endif
+
+    if (nrf_hb_thread.joinable()) nrf_hb_thread.join();
 
 #ifdef NWDAF_USE_SD_JOURNAL
     sd_notify(0, "STOPPING=1");

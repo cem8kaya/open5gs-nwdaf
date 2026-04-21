@@ -183,3 +183,64 @@ TEST_CASE("Integration: POST /train returns 200") {
     REQUIRE(res);
     REQUIRE(res->status == 200);
 }
+
+// ── COMP-05: QOS_SUSTAINABILITY case normalization ────────────────────────────
+
+TEST_CASE("Integration: COMP-05 QOS_SUSTAINABILITY (uppercase) normalized to 200") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    // Canonical casing
+    auto res1 = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=QoS_SUSTAINABILITY");
+    REQUIRE(res1);
+    REQUIRE(res1->status == 200);
+    json b1 = json::parse(res1->body);
+    REQUIRE(b1["analyticsId"] == "QoS_SUSTAINABILITY");
+
+    // Uppercase variant — must be normalized, not rejected with 422
+    auto res2 = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=QOS_SUSTAINABILITY");
+    REQUIRE(res2);
+    REQUIRE(res2->status == 200);
+    json b2 = json::parse(res2->body);
+    // Server normalizes to canonical form in the response
+    REQUIRE(b2["analyticsId"] == "QoS_SUSTAINABILITY");
+}
+
+// ── COMP-03: NF_LOAD rejects supi parameter ──────────────────────────────────
+
+TEST_CASE("Integration: COMP-03 NF_LOAD with supi returns 400") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD&supi=imsi-999700000000001");
+    REQUIRE(res);
+    REQUIRE(res->status == 400);
+    json body = json::parse(res->body);
+    REQUIRE(body.contains("cause"));
+}
+
+// ── COMP-03: UE_COMMUNICATION returns supi field when filtered ─────────────────
+
+TEST_CASE("Integration: COMP-03 UE_COMMUNICATION with supi includes supi in response") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    auto res = cli.Get("/nwdaf-analytics/v1/analytics"
+                       "?analyticsId=UE_COMMUNICATION&supi=imsi-999700000000001");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+    json body = json::parse(res->body);
+    REQUIRE(body["analData"].contains("supi"));
+    REQUIRE(body["analData"]["supi"] == "imsi-999700000000001");
+}
+
+// ── COMP-03: QoS_SUSTAINABILITY with supi returns supiFiltered flag ───────────
+
+TEST_CASE("Integration: COMP-03 QoS_SUSTAINABILITY with supi returns supiFiltered=false") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    auto res = cli.Get("/nwdaf-analytics/v1/analytics"
+                       "?analyticsId=QoS_SUSTAINABILITY&supi=imsi-999700000000001");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+    json body = json::parse(res->body);
+    REQUIRE(body["analData"].contains("supiFiltered"));
+    REQUIRE(body["analData"]["supiFiltered"] == false);
+}

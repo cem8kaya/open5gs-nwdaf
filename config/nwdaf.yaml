@@ -40,9 +40,10 @@ nwdaf:
   mongodb_uri: "mongodb://127.0.0.1:27017"
   mongodb_db:  "open5gs"
 
-  # NRF registration (one-shot on startup)
+  # NRF registration + heartbeat (TS 29.510 §5.3.2.4)
   nrf_uri: "http://127.0.0.1:7777"
   nrf_register_on_startup: true
+  nrf_heartbeat_interval_seconds: 60   # TS 29.510 recommends ≤ 60s; 0 = disabled
 
   # ML
   model_dir: "/opt/nwdaf/models"
