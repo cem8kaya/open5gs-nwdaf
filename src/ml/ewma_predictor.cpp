@@ -49,3 +49,7 @@ void EwmaPredictor::reset() {
     history_.clear();
     residuals_.clear();
 }
+
+void EwmaPredictor::setAlpha(double alpha) {
+    alpha_ = alpha;
+}

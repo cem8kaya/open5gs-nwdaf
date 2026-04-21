@@ -10,6 +10,8 @@ public:
     double residualStddev(int n = 20) const;
     bool hasHistory() const;
     void reset();
+    // PROD-04: hot-reload support
+    void setAlpha(double alpha);
 
 private:
     double              alpha_;
