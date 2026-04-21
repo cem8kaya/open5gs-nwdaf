@@ -22,15 +22,48 @@
 #include <systemd/sd-daemon.h>
 #endif
 
-static std::atomic<bool> g_shutdown{false};
-static NwdafServer* g_server_ptr = nullptr;
-static NwdafCollector* g_collector_ptr = nullptr;
+static std::atomic<bool>   g_shutdown{false};
+static NwdafServer*        g_server_ptr    = nullptr;
+static NwdafCollector*     g_collector_ptr = nullptr;
+static NwdafAnalyticsEngine* g_engine_ptr  = nullptr;
+static std::string         g_config_path;
 
 static void signalHandler(int sig) {
     spdlog::info("Received signal {}, shutting down...", sig);
     g_shutdown = true;
     if (g_server_ptr)    g_server_ptr->stop();
     if (g_collector_ptr) g_collector_ptr->stopBackgroundCollection();
+}
+
+// PROD-04: SIGHUP re-reads the config from disk and applies hot-reloadable
+// settings (log level, collection_interval, ewma_alpha, anomaly_contamination).
+// sbi_port and bind_address require a full restart.
+static void sighupHandler(int) {
+    spdlog::info("SIGHUP received — reloading configuration from {}", g_config_path);
+    try {
+        auto new_cfg = NwdafConfig::load(g_config_path);
+        spdlog::info("Config reloaded: log_level={} collection_interval={}s ewma_alpha={} contamination={}",
+                     new_cfg.log_level,
+                     new_cfg.collection_interval_seconds,
+                     new_cfg.ewma_alpha,
+                     new_cfg.anomaly_contamination);
+
+        // Apply log level
+        spdlog::level::level_enum level = spdlog::level::info;
+        if      (new_cfg.log_level == "trace") level = spdlog::level::trace;
+        else if (new_cfg.log_level == "debug") level = spdlog::level::debug;
+        else if (new_cfg.log_level == "warn")  level = spdlog::level::warn;
+        else if (new_cfg.log_level == "error") level = spdlog::level::err;
+        spdlog::default_logger()->set_level(level);
+
+        if (g_collector_ptr)
+            g_collector_ptr->updateConfig(new_cfg.collection_interval_seconds, new_cfg.ewma_alpha);
+        if (g_engine_ptr)
+            g_engine_ptr->updateConfig(new_cfg.anomaly_contamination);
+
+    } catch (const std::exception& e) {
+        spdlog::error("Config reload failed: {}", e.what());
+    }
 }
 
 static void setupLogging(const NwdafConfig& cfg) {
@@ -102,13 +135,24 @@ int main(int argc, char* argv[]) {
 
     NwdafCollector        collector(config);
     NwdafAnalyticsEngine  engine(collector, config);
-    NwdafSubscriptionStore subs;
+
+    // PROD-02: wire up persistent subscription backend when SQLite is available
+    std::shared_ptr<NwdafSubscriptionBackend> sub_backend;
+#ifdef NWDAF_HAS_SQLITE
+    if (config.history_backend == "sqlite") {
+        sub_backend = std::make_shared<SqliteSubscriptionBackend>(config.history_db_path);
+    }
+#endif
+    NwdafSubscriptionStore subs(sub_backend);
     NwdafServer           server(engine, subs, config);
 
     g_server_ptr    = &server;
     g_collector_ptr = &collector;
+    g_engine_ptr    = &engine;
+    g_config_path   = config_path;
     std::signal(SIGTERM, signalHandler);
     std::signal(SIGINT,  signalHandler);
+    std::signal(SIGHUP,  sighupHandler);  // PROD-04
 
     collector.startBackgroundCollection();
 
@@ -120,8 +164,10 @@ int main(int argc, char* argv[]) {
     }
 
     // COMP-01: subscription push delivery notifier
+    // PROD-03: pass server's atomic counters so /metrics can expose them
 #ifdef NWDAF_ENABLE_PUSH_DELIVERY
-    NwdafNotifier notifier(subs, engine);
+    NwdafNotifier notifier(subs, engine, 5,
+                           &server.notif_total_, &server.notif_failures_);
     notifier.start();
 #endif
 

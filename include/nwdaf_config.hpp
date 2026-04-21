@@ -35,4 +35,12 @@ public:
 
     std::string log_level;
     std::string log_file;
+
+    // PROD-01: throughput history persistence
+    std::string history_backend;    // "none" | "sqlite" | "mongodb"
+    std::string history_db_path;    // used when history_backend == "sqlite"
+
+    // PROD-06: rate limiting
+    int rate_limit_per_ip_rps;      // 0 = unlimited per-IP
+    int rate_limit_global_rps;      // 0 = unlimited global
 };

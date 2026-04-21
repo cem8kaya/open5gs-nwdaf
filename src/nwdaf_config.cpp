@@ -81,5 +81,13 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     cfg.log_level = n["log_level"] ? n["log_level"].as<std::string>() : "info";
     cfg.log_file  = n["log_file"]  ? n["log_file"].as<std::string>()  : "/var/log/open5gs/nwdaf.log";
 
+    // PROD-01
+    cfg.history_backend  = n["history_backend"]  ? n["history_backend"].as<std::string>()  : "none";
+    cfg.history_db_path  = n["history_db_path"]  ? n["history_db_path"].as<std::string>()  : "/opt/nwdaf/history.db";
+
+    // PROD-06
+    cfg.rate_limit_per_ip_rps = n["rate_limit_per_ip_rps"] ? n["rate_limit_per_ip_rps"].as<int>() : 10;
+    cfg.rate_limit_global_rps = n["rate_limit_global_rps"] ? n["rate_limit_global_rps"].as<int>() : 100;
+
     return cfg;
 }

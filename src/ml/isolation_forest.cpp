@@ -1,6 +1,8 @@
 #include "ml/isolation_forest.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
+#include <ctime>
 #include <fstream>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
@@ -124,6 +126,7 @@ double IsolationForest::anomalyScore(const std::array<double,2>& x) const {
 
 void IsolationForest::fit(const std::vector<std::array<double,2>>& X) {
     if (X.empty()) return;
+    n_samples_ = (int)X.size();  // PROD-07: track for model metadata
 
     int subsample = std::min(256, (int)X.size());
     int max_depth = (int)std::ceil(std::log2((double)subsample));
@@ -177,15 +180,26 @@ std::vector<int> IsolationForest::predict(
 bool IsolationForest::isFitted() const { return fitted_; }
 
 void IsolationForest::save(const std::string& path) const {
+    // PROD-07: include version metadata so load() can validate the file format.
+    auto now = std::chrono::system_clock::now();
+    auto t   = std::chrono::system_clock::to_time_t(now);
+    struct tm tm_buf;
+    gmtime_r(&t, &tm_buf);
+    char ts_buf[32];
+    strftime(ts_buf, sizeof(ts_buf), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
+
     json j;
-    j["n_trees"] = n_trees_;
+    j["version"]      = 1;
+    j["trained_at"]   = ts_buf;
+    j["n_samples"]    = n_samples_;
+    j["n_trees"]      = n_trees_;
     j["contamination"] = contamination_;
-    j["threshold"] = threshold_;
-    j["fitted"] = fitted_;
+    j["threshold"]    = threshold_;
+    j["fitted"]       = fitted_;
     j["trees"] = json::array();
-    for (const auto& t : trees_) {
+    for (const auto& tree : trees_) {
         json tj = json::array();
-        for (const auto& n : t.nodes) {
+        for (const auto& n : tree.nodes) {
             tj.push_back({{"is_leaf", n.is_leaf}, {"split_feature", n.split_feature},
                           {"split_value", n.split_value}, {"left", n.left},
                           {"right", n.right}, {"size", n.size}});
@@ -193,30 +207,34 @@ void IsolationForest::save(const std::string& path) const {
         j["trees"].push_back(tj);
     }
     std::ofstream f(path);
+    if (!f) throw std::runtime_error("Cannot write model file: " + path);
     f << j.dump();
+    f.flush();
 }
 
 void IsolationForest::load(const std::string& path) {
     std::ifstream f(path);
     if (!f) throw std::runtime_error("Cannot open model file: " + path);
     json j = json::parse(f);
-    n_trees_ = j["n_trees"];
+    // PROD-07: version field present in v1+ files; older files without it still load.
+    n_trees_       = j["n_trees"];
     contamination_ = j["contamination"];
-    threshold_ = j["threshold"];
-    fitted_ = j["fitted"];
+    threshold_     = j["threshold"];
+    fitted_        = j["fitted"];
+    n_samples_     = j.value("n_samples", 0);
     trees_.clear();
     for (const auto& tj : j["trees"]) {
-        IsolationTree t;
+        IsolationTree tree;
         for (const auto& nj : tj) {
             IsolationTree::Node n;
-            n.is_leaf = nj["is_leaf"];
+            n.is_leaf       = nj["is_leaf"];
             n.split_feature = nj["split_feature"];
-            n.split_value = nj["split_value"];
-            n.left = nj["left"];
-            n.right = nj["right"];
-            n.size = nj["size"];
-            t.nodes.push_back(n);
+            n.split_value   = nj["split_value"];
+            n.left          = nj["left"];
+            n.right         = nj["right"];
+            n.size          = nj["size"];
+            tree.nodes.push_back(n);
         }
-        trees_.push_back(std::move(t));
+        trees_.push_back(std::move(tree));
     }
 }
