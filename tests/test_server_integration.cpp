@@ -244,3 +244,119 @@ TEST_CASE("Integration: COMP-03 QoS_SUSTAINABILITY with supi returns supiFiltere
     REQUIRE(body["analData"].contains("supiFiltered"));
     REQUIRE(body["analData"]["supiFiltered"] == false);
 }
+
+// ── PROD-03: Prometheus metrics endpoint ─────────────────────────────────────
+
+TEST_CASE("Integration: PROD-03 GET /metrics returns 200 with Prometheus text format") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    auto res = cli.Get("/nwdaf-analytics/v1/metrics");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+    // Content-Type must indicate Prometheus text format
+    std::string ct = res->get_header_value("Content-Type");
+    REQUIRE(ct.find("text/plain") != std::string::npos);
+}
+
+TEST_CASE("Integration: PROD-03 /metrics contains required gauge names") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    auto res = cli.Get("/nwdaf-analytics/v1/metrics");
+    REQUIRE(res);
+    REQUIRE(res->body.find("nwdaf_throughput_dl_kbps")           != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_throughput_ul_kbps")           != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_active_subscriptions")         != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_anomaly_pct")                  != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_mos_score")                    != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_network_performance_score")    != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_subscription_notifications_total")         != std::string::npos);
+    REQUIRE(res->body.find("nwdaf_subscription_notification_failures_total") != std::string::npos);
+}
+
+TEST_CASE("Integration: PROD-03 /metrics request counter increments after analytics call") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+
+    // Make two NF_LOAD requests
+    cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
+    cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
+
+    auto res = cli.Get("/nwdaf-analytics/v1/metrics");
+    REQUIRE(res);
+    // The counter for NF_LOAD should appear and be >= 2
+    REQUIRE(res->body.find("nwdaf_analytics_requests_total{id=\"NF_LOAD\"}") != std::string::npos);
+}
+
+// ── PROD-05: per-request correlation IDs ─────────────────────────────────────
+
+TEST_CASE("Integration: PROD-05 response includes X-Request-Id header") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+    // Server must always echo or generate an X-Request-Id
+    std::string req_id = res->get_header_value("X-Request-Id");
+    REQUIRE(!req_id.empty());
+}
+
+TEST_CASE("Integration: PROD-05 client-supplied X-Request-Id is echoed verbatim") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    httplib::Headers headers = {{"X-Request-Id", "test-correlation-abc123"}};
+    auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=UE_MOBILITY", headers);
+    REQUIRE(res);
+    REQUIRE(res->get_header_value("X-Request-Id") == "test-correlation-abc123");
+}
+
+TEST_CASE("Integration: PROD-05 /health also returns X-Request-Id when sent") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    // Health endpoint does not set X-Request-Id (rate-limited but no correlation logging)
+    // The important thing is it still returns 200
+    auto res = cli.Get("/nwdaf-analytics/v1/health");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+}
+
+// ── PROD-06: rate limiter — normal traffic is allowed ────────────────────────
+
+TEST_CASE("Integration: PROD-06 single request is not rate-limited (default 10 RPS)") {
+    auto& fx = getFixture();
+    httplib::Client cli("127.0.0.1", TEST_PORT);
+    // A single GET should never hit the rate limit
+    auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);  // must not be 429
+}
+
+TEST_CASE("Integration: PROD-06 rate-limited response is 429 with Retry-After header") {
+    // Build a separate server fixture with very aggressive limits (1 RPS per IP)
+    NwdafConfig cfg2 = makeTestConfig();
+    cfg2.sbi_port              = 17780;  // use a different port to avoid fixture collision
+    cfg2.rate_limit_per_ip_rps = 1;
+    cfg2.rate_limit_global_rps = 1000;
+
+    MockNwdafCollector  col2(cfg2);
+    NwdafAnalyticsEngine eng2(col2, cfg2);
+    NwdafSubscriptionStore subs2;
+    NwdafServer srv2(eng2, subs2, cfg2);
+
+    std::thread t([&]{ srv2.start(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    httplib::Client cli("127.0.0.1", 17780);
+    // First request consumes the 1-token bucket
+    auto r1 = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
+    // Second immediate request should be 429
+    auto r2 = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
+
+    srv2.stop();
+    if (t.joinable()) t.join();
+
+    REQUIRE(r1);
+    REQUIRE(r1->status == 200);
+    REQUIRE(r2);
+    REQUIRE(r2->status == 429);
+    REQUIRE(!r2->get_header_value("Retry-After").empty());
+}

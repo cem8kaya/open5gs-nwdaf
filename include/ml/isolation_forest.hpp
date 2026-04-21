@@ -40,6 +40,7 @@ private:
     std::vector<IsolationTree> trees_;
     double                     threshold_ = 0.0;
     bool                       fitted_ = false;
+    int                        n_samples_ = 0;   // PROD-07: stored in model metadata
 
     double avgPathLength(int n) const;
     double anomalyScore(const std::array<double,2>& x) const;

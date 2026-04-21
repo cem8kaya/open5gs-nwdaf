@@ -18,6 +18,11 @@
 #include <mongocxx/client.hpp>
 #endif
 
+#ifdef NWDAF_HAS_SQLITE
+// Forward-declare sqlite3 to avoid including <sqlite3.h> in this header.
+struct sqlite3;
+#endif
+
 struct AmfEvent {
     std::string event_type;
     std::string supi;
@@ -65,6 +70,9 @@ public:
     void startBackgroundCollection();
     void stopBackgroundCollection();
 
+    // PROD-04: hot-reloadable settings (safe to call from SIGHUP handler)
+    void updateConfig(int collection_interval_seconds, double ewma_alpha);
+
     std::vector<AmfEvent>         getRecentAmfEvents(int n = 100) const;
     std::vector<SmfEvent>         getRecentSmfEvents(int n = 100) const;
     std::vector<ThroughputSample> getThroughputHistory(int n = 60) const;
@@ -107,6 +115,14 @@ private:
     EwmaPredictor dl_ewma_;
     EwmaPredictor ul_ewma_;
 
+    // PROD-08: pre-snapshot for non-blocking throughput measurement
+    struct NetSnapshot {
+        std::map<std::string, std::pair<uint64_t,uint64_t>> readings;
+        std::chrono::steady_clock::time_point ts;
+    };
+    NetSnapshot prev_net_snapshot_;
+    bool        has_net_snapshot_ = false;
+
     std::thread        bg_thread_;
     std::atomic<bool>  running_{false};
     void               bgLoop();
@@ -115,5 +131,15 @@ private:
 
 #ifdef NWDAF_HAS_MONGODB
     std::unique_ptr<mongocxx::client> mongo_client_;
+#endif
+
+    // PROD-01: optional SQLite-backed throughput history persistence
+#ifdef NWDAF_HAS_SQLITE
+    sqlite3* history_db_ = nullptr;
+    void initHistoryDb();
+    void persistThroughputSample(const ThroughputSample& s);
+    void warmFromHistoryDb();
+#else
+    void warmFromHistoryDb() {}  // no-op when SQLite not compiled in
 #endif
 };
