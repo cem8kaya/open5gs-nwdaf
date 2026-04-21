@@ -68,8 +68,9 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     cfg.mongodb_uri = n["mongodb_uri"] ? n["mongodb_uri"].as<std::string>() : "mongodb://127.0.0.1:27017";
     cfg.mongodb_db  = n["mongodb_db"]  ? n["mongodb_db"].as<std::string>()  : "open5gs";
 
-    cfg.nrf_uri                  = n["nrf_uri"]                  ? n["nrf_uri"].as<std::string>()     : "http://127.0.0.1:7777";
-    cfg.nrf_register_on_startup  = n["nrf_register_on_startup"]  ? n["nrf_register_on_startup"].as<bool>() : true;
+    cfg.nrf_uri                          = n["nrf_uri"]                          ? n["nrf_uri"].as<std::string>()               : "http://127.0.0.1:7777";
+    cfg.nrf_register_on_startup          = n["nrf_register_on_startup"]          ? n["nrf_register_on_startup"].as<bool>()       : true;
+    cfg.nrf_heartbeat_interval_seconds   = n["nrf_heartbeat_interval_seconds"]   ? n["nrf_heartbeat_interval_seconds"].as<int>() : 60;
 
     cfg.model_dir                = n["model_dir"]                ? n["model_dir"].as<std::string>()    : "/opt/nwdaf/models";
     cfg.anomaly_contamination    = n["anomaly_contamination"]    ? n["anomaly_contamination"].as<double>()  : 0.10;
