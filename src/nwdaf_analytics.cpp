@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <numeric>
 #include <filesystem>
+#include <unistd.h>
 
 const std::set<std::string> NwdafAnalyticsEngine::VALID_ANALYTICS_IDS = {
     "NF_LOAD", "UE_MOBILITY", "UE_COMMUNICATION",
@@ -123,14 +124,36 @@ void NwdafAnalyticsEngine::loadModels() {
 }
 
 void NwdafAnalyticsEngine::saveModels() {
+    // PROD-07: write-then-rename so a mid-write crash never leaves a corrupt file.
+    // std::filesystem::rename() is atomic when src and dst are on the same filesystem.
+    std::string final_path = config_.model_dir + "/isolation_forest.json";
+    std::string tmp_path   = final_path + ".tmp." + std::to_string(getpid());
     try {
         std::filesystem::create_directories(config_.model_dir);
-        std::string path = config_.model_dir + "/isolation_forest.json";
-        anomaly_model_.save(path);
-        spdlog::info("Saved anomaly model to {}", path);
+        anomaly_model_.save(tmp_path);
+        std::filesystem::rename(tmp_path, final_path);
+        spdlog::info("Saved anomaly model to {}", final_path);
     } catch (const std::exception& e) {
         spdlog::warn("Failed to save anomaly model: {}", e.what());
+        std::error_code ec;
+        std::filesystem::remove(tmp_path, ec);  // best-effort cleanup of partial write
     }
+}
+
+// PROD-03: accessor methods for the Prometheus metrics endpoint
+std::pair<double,double> NwdafAnalyticsEngine::getCurrentThroughput() const {
+    auto hist = collector_.getThroughputHistory(1);
+    if (hist.empty()) return {0.0, 0.0};
+    return {hist.back().total_dl_kbps, hist.back().total_ul_kbps};
+}
+
+std::vector<NfMetric> NwdafAnalyticsEngine::getCurrentNfMetrics() const {
+    return collector_.getCachedNfMetrics();
+}
+
+// PROD-04: hot-reload — update contamination; takes effect on the next retrain()
+void NwdafAnalyticsEngine::updateConfig(double anomaly_contamination) {
+    config_.anomaly_contamination = anomaly_contamination;
 }
 
 // BUG-04: explicit retrain — always calls fit(), regardless of isFitted() state

@@ -24,6 +24,10 @@ public:
     // BUG-04: explicit retrain — always fits, regardless of isFitted() state
     json retrain();
 
+    // PROD-03: expose collector data for Prometheus metrics endpoint
+    std::pair<double,double>   getCurrentThroughput() const;   // {dl_kbps, ul_kbps}
+    std::vector<NfMetric>      getCurrentNfMetrics()  const;
+
     static const std::set<std::string> VALID_ANALYTICS_IDS;
 
     // COMP-04: time window helpers (public for testability)
@@ -49,6 +53,9 @@ public:
         const std::vector<AmfEvent>& events, const std::string& supi);
     static std::vector<SmfEvent> filterSmfBySupi(
         const std::vector<SmfEvent>& events, const std::string& supi);
+
+    // PROD-04: hot-reload analytics config from SIGHUP handler
+    void updateConfig(double anomaly_contamination);
 
 private:
     NwdafCollector& collector_;

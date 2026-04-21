@@ -28,8 +28,11 @@ static std::string nowISO() {
 
 NwdafNotifier::NwdafNotifier(NwdafSubscriptionStore& subs,
                               NwdafAnalyticsEngine&   engine,
-                              int poll_interval_seconds)
-    : subs_(subs), engine_(engine), poll_interval_s_(poll_interval_seconds)
+                              int poll_interval_seconds,
+                              std::atomic<uint64_t>*  notif_total,
+                              std::atomic<uint64_t>*  notif_failures)
+    : subs_(subs), engine_(engine), poll_interval_s_(poll_interval_seconds),
+      notif_total_(notif_total), notif_failures_(notif_failures)
 {}
 
 void NwdafNotifier::start() {
@@ -103,6 +106,9 @@ void NwdafNotifier::deliver(const Subscription& sub) {
         auto res = cli.Post(path, body.dump(), "application/json");
 
         if (res && res->status >= 200 && res->status < 300) {
+            // PROD-03: increment shared notification counter
+            if (notif_total_) ++(*notif_total_);
+
             // Update last-delivered timestamp
             {
                 std::lock_guard<std::mutex> lk(ts_mutex_);
@@ -120,11 +126,14 @@ void NwdafNotifier::deliver(const Subscription& sub) {
                              sub.sub_id, new_count);
             }
         } else {
+            // PROD-03: increment shared failure counter
+            if (notif_failures_) ++(*notif_failures_);
             spdlog::warn("Notifier: delivery failed for sub {} → {} (HTTP {})",
                          sub.sub_id, sub.notif_uri,
                          res ? std::to_string(res->status) : "no response");
         }
     } catch (const std::exception& e) {
+        if (notif_failures_) ++(*notif_failures_);
         spdlog::warn("Notifier: delivery exception for sub {}: {}", sub.sub_id, e.what());
     }
 }

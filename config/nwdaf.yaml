@@ -55,3 +55,13 @@ nwdaf:
   # Logging
   log_level: "info"                 # trace|debug|info|warn|error
   log_file: "/var/log/open5gs/nwdaf.log"
+
+  # PROD-01: throughput history + subscription persistence across restarts
+  # Requires libsqlite3-dev; set to "none" to disable (in-memory only, original behaviour)
+  history_backend: "sqlite"         # "none" | "sqlite"
+  history_db_path: "/opt/nwdaf/history.db"
+
+  # PROD-06: SBI endpoint rate limiting (token bucket per client IP + global)
+  # Set to 0 to disable the respective limit
+  rate_limit_per_ip_rps: 10         # max requests/s from a single client IP
+  rate_limit_global_rps: 100        # max total requests/s across all clients
