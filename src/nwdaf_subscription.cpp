@@ -68,3 +68,10 @@ int NwdafSubscriptionStore::count() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return (int)store_.size();
 }
+
+int NwdafSubscriptionStore::incrementReportCount(const std::string& sub_id) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    auto it = store_.find(sub_id);
+    if (it == store_.end()) return -1;
+    return ++it->second.report_count;
+}
