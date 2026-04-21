@@ -4,6 +4,7 @@
 #include <vector>
 #include <string>
 #include <cstdint>
+#include <chrono>
 
 class MockNwdafCollector : public NwdafCollector {
 public:
@@ -17,12 +18,20 @@ public:
     void setSubscriberCount(int n);
     void setNfMetrics(const std::vector<NfMetric>& metrics);
 
+    // BUG-01 test support: control the clock seen by computeCpuPct
+    void setMockCpuTime(std::chrono::steady_clock::time_point t);
+    void advanceMockCpuTime(std::chrono::steady_clock::duration d);
+
+    // BUG-01 test support: call the protected computeCpuPct directly
+    double testComputeCpuPct(int pid);
+
 protected:
     std::vector<std::string>         readJournalLines(const std::string& unit, int n) override;
     std::pair<long,long>             readProcStat(int pid) override;
     long                             readProcMemKb(int pid) override;
     std::pair<uint64_t,uint64_t>     readNetStats(const std::string& iface) override;
     int                              querySubscriberCountFromMongo() override;
+    std::chrono::steady_clock::time_point getCpuNow() const override;
 
 private:
     std::vector<std::string>                                mock_amf_lines_;
@@ -33,4 +42,8 @@ private:
     std::map<int, long>                                     mock_mem_kb_;
     int                                                     mock_subscriber_count_ = 5;
     std::vector<NfMetric>                                   mock_nf_metrics_;
+
+    // BUG-01: injectable clock state
+    std::chrono::steady_clock::time_point mock_cpu_now_;
+    bool                                  use_mock_cpu_now_ = false;
 };

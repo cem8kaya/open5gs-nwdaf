@@ -17,9 +17,8 @@ NwdafAnalyticsEngine::NwdafAnalyticsEngine(NwdafCollector& collector,
                                            const NwdafConfig& config)
     : collector_(collector),
       config_(config),
-      anomaly_model_(100, config.anomaly_contamination, 42),
-      dl_ewma_(config.ewma_alpha),
-      ul_ewma_(config.ewma_alpha)
+      anomaly_model_(100, config.anomaly_contamination, 42)
+    // BUG-02: dl_ewma_ / ul_ewma_ moved to NwdafCollector — updated in bgLoop only
 {
     loadModels();
 }
@@ -53,6 +52,34 @@ void NwdafAnalyticsEngine::saveModels() {
     } catch (const std::exception& e) {
         spdlog::warn("Failed to save anomaly model: {}", e.what());
     }
+}
+
+// BUG-04: explicit retrain — always calls fit(), regardless of isFitted() state
+json NwdafAnalyticsEngine::retrain() {
+    auto hist = collector_.getThroughputHistory(360);
+    if ((int)hist.size() < config_.anomaly_min_samples) {
+        return {
+            {"status",     "skipped"},
+            {"reason",     "INSUFFICIENT_DATA"},
+            {"dataPoints", (int)hist.size()}
+        };
+    }
+
+    std::vector<std::array<double,2>> X;
+    X.reserve(hist.size());
+    for (const auto& s : hist) X.push_back({s.total_dl_kbps, s.total_ul_kbps});
+
+    {
+        std::unique_lock<std::shared_mutex> lk(ml_mutex_);
+        anomaly_model_.fit(X);  // always fits, even if already fitted
+    }
+    saveModels();
+
+    return {
+        {"status",     "trained"},
+        {"dataPoints", (int)X.size()},
+        {"ts",         nowISO()}
+    };
 }
 
 json NwdafAnalyticsEngine::compute(const std::string& analytics_id,
@@ -215,13 +242,24 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string&, const std::stri
     X.reserve(n);
     for (const auto& s : hist) X.push_back({s.total_dl_kbps, s.total_ul_kbps});
 
-    if (!anomaly_model_.isFitted()) {
-        anomaly_model_.fit(X);
-        saveModels();
+    // BUG-03: exclusive lock for fit; shared lock for predict/score
+    bool just_fitted = false;
+    {
+        std::unique_lock<std::shared_mutex> lk(ml_mutex_);
+        if (!anomaly_model_.isFitted()) {
+            anomaly_model_.fit(X);
+            just_fitted = true;
+        }
     }
+    if (just_fitted) saveModels();  // I/O outside lock; only happens once (first call)
 
-    auto preds = anomaly_model_.predict(X);
-    auto scores = anomaly_model_.scoresSamples(X);
+    std::vector<int> preds;
+    std::vector<double> scores;
+    {
+        std::shared_lock<std::shared_mutex> lk(ml_mutex_);
+        preds  = anomaly_model_.predict(X);
+        scores = anomaly_model_.scoresSamples(X);
+    }
 
     std::vector<int> anomaly_indices;
     double score_sum = 0;
@@ -256,21 +294,14 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string&, const std::stri
 // ── QoS_SUSTAINABILITY ────────────────────────────────────────────────────────
 
 json NwdafAnalyticsEngine::qosSustainability(const std::string&, const std::string&, const std::string&) {
-    auto hist = collector_.getThroughputHistory(60);
+    // BUG-02: EWMA state is updated solely in NwdafCollector::bgLoop.
+    // Read predictions here without mutating shared state — makes this call idempotent.
+    auto hist = collector_.getThroughputHistory(1);
+    double cur_dl = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
+    double cur_ul = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
 
-    double cur_dl = 0, cur_ul = 0;
-    if (!hist.empty()) {
-        // Feed history into EWMA predictors
-        for (const auto& s : hist) {
-            dl_ewma_.update(s.total_dl_kbps);
-            ul_ewma_.update(s.total_ul_kbps);
-        }
-        cur_dl = hist.back().total_dl_kbps;
-        cur_ul = hist.back().total_ul_kbps;
-    }
-
-    double pred_dl = dl_ewma_.predict();
-    double pred_ul = ul_ewma_.predict();
+    double pred_dl = collector_.getDlEwmaPrediction();
+    double pred_ul = collector_.getUlEwmaPrediction();
 
     auto trend = [](double cur, double pred) -> std::string {
         if (cur == 0) return "STABLE";

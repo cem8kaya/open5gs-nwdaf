@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "nwdaf_collector.hpp"
 #include "mock_open5gs.hpp"
 #include <thread>
@@ -73,6 +74,32 @@ TEST_CASE("MockCollector: background collection stores throughput history") {
 
     auto hist = col.getThroughputHistory(10);
     REQUIRE(hist.size() >= 1);
+}
+
+TEST_CASE("MockCollector: CPU load is rate-based, not cumulative") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+
+    auto t0 = std::chrono::steady_clock::now();
+    col.setMockCpuTime(t0);
+
+    // First call: no snapshot exists → establishes baseline, returns 0.0
+    col.setProcStat(1000, 0, 0);
+    double r1 = col.testComputeCpuPct(1000);
+    REQUIRE(r1 == 0.0);
+
+    // Advance 1 second, process consumed 50 ticks (utime+stime).
+    // Expected: 100 × 50 / (1.0 × 100 Hz) = 50 %
+    col.advanceMockCpuTime(std::chrono::seconds(1));
+    col.setProcStat(1000, 50, 0);
+    double r2 = col.testComputeCpuPct(1000);
+    REQUIRE(r2 == Catch::Approx(50.0).epsilon(0.01));
+
+    // Third call with zero new ticks → 0 %
+    col.advanceMockCpuTime(std::chrono::seconds(1));
+    // proc stat unchanged — same (50, 0)
+    double r3 = col.testComputeCpuPct(1000);
+    REQUIRE(r3 == 0.0);
 }
 
 TEST_CASE("NwdafCollector: throughput sample has valid fields") {
