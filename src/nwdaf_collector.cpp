@@ -222,6 +222,7 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
     if (service_it == config_.nf_service_names.end()) return events;
 
     auto lines = readJournalLines(service_it->second, config_.smf_journal_lines);
+    std::regex supi_re(config_.supi_regex);
 
     for (const auto& line : lines) {
         SmfEvent ev;
@@ -241,6 +242,10 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
             ev.event_type = "QOS_FLOW_CHANGE";
         else
             continue;
+
+        std::smatch m;
+        if (std::regex_search(line, m, supi_re))
+            ev.supi = "imsi-" + m[1].str();
 
         events.push_back(std::move(ev));
     }

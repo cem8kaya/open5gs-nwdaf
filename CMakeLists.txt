@@ -4,8 +4,9 @@ project(open5gs-nwdaf VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(NWDAF_USE_SD_JOURNAL "Use libsystemd sd-journal API (requires systemd dev headers)" ON)
-option(NWDAF_BUILD_TESTS    "Build unit and integration tests" ON)
+option(NWDAF_USE_SD_JOURNAL      "Use libsystemd sd-journal API (requires systemd dev headers)" ON)
+option(NWDAF_BUILD_TESTS         "Build unit and integration tests" ON)
+option(NWDAF_ENABLE_PUSH_DELIVERY "Enable subscription push delivery background thread (COMP-01)" ON)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 find_package(PkgConfig REQUIRED)
@@ -45,7 +46,7 @@ else()
 endif()
 
 # ── NWDAF library ─────────────────────────────────────────────────────────────
-add_library(nwdaf_lib
+set(NWDAF_LIB_SOURCES
     src/nwdaf_config.cpp
     src/nwdaf_collector.cpp
     src/nwdaf_analytics.cpp
@@ -54,6 +55,14 @@ add_library(nwdaf_lib
     src/ml/isolation_forest.cpp
     src/ml/ewma_predictor.cpp
 )
+
+if(NWDAF_ENABLE_PUSH_DELIVERY)
+    list(APPEND NWDAF_LIB_SOURCES src/nwdaf_notifier.cpp)
+    add_compile_definitions(NWDAF_ENABLE_PUSH_DELIVERY)
+    message(STATUS "Push delivery enabled (NWDAF_ENABLE_PUSH_DELIVERY=ON)")
+endif()
+
+add_library(nwdaf_lib ${NWDAF_LIB_SOURCES})
 
 target_include_directories(nwdaf_lib PUBLIC include)
 target_link_libraries(nwdaf_lib PUBLIC

@@ -87,6 +87,14 @@ void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Respo
     }
 
     std::string analytics_id = req.get_param_value("analyticsId");
+
+    // COMP-05: normalize the uppercase-only variant to the canonical mixed-case form
+    // TS 29.520 Annex A specifies "QoS_SUSTAINABILITY"; some consumer NFs send uppercase.
+    if (analytics_id == "QOS_SUSTAINABILITY") {
+        spdlog::debug("Normalizing QOS_SUSTAINABILITY → QoS_SUSTAINABILITY");
+        analytics_id = "QoS_SUSTAINABILITY";
+    }
+
     if (NwdafAnalyticsEngine::VALID_ANALYTICS_IDS.find(analytics_id) ==
         NwdafAnalyticsEngine::VALID_ANALYTICS_IDS.end())
     {
@@ -100,6 +108,16 @@ void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Respo
     std::string supi     = req.has_param("supi")    ? req.get_param_value("supi")    : "";
     std::string start_ts = req.has_param("startTs") ? req.get_param_value("startTs") : "";
     std::string end_ts   = req.has_param("endTs")   ? req.get_param_value("endTs")   : "";
+
+    // COMP-03: NF_LOAD is aggregate-only; SUPI filtering is not applicable
+    if (analytics_id == "NF_LOAD" && !supi.empty()) {
+        res.set_content(errorResponse(400, "Bad Request",
+            "supi parameter is not applicable for NF_LOAD analytics "
+            "(NF load is network-wide, not per-UE)").dump(),
+            "application/json");
+        res.status = 400;
+        return;
+    }
 
     try {
         std::string req_time = nowISO();

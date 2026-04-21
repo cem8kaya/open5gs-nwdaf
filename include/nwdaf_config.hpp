@@ -25,6 +25,7 @@ public:
 
     std::string nrf_uri;
     bool        nrf_register_on_startup;
+    int         nrf_heartbeat_interval_seconds;
 
     std::string model_dir;
     double      anomaly_contamination;
