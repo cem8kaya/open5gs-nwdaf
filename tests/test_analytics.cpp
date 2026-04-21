@@ -2,6 +2,8 @@
 #include <catch2/catch_approx.hpp>
 #include "nwdaf_analytics.hpp"
 #include "mock_open5gs.hpp"
+#include <thread>
+#include <chrono>
 
 static NwdafConfig makeTestConfig() {
     NwdafConfig cfg;
@@ -169,6 +171,32 @@ TEST_CASE("NETWORK_PERFORMANCE score with 6/7 NFs active") {
     double score = result["overallScore"];
     REQUIRE(score >= 0.0);
     REQUIRE(score <= 100.0);
+}
+
+TEST_CASE("QoS_SUSTAINABILITY: EWMA prediction is idempotent across multiple calls") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    col.setNetStats("ogstun", 0, 0);
+
+    // Run one full collection cycle to populate the EWMA in the collector.
+    // collectUPFThroughput sleeps 1s internally; join() ensures it finishes.
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    col.stopBackgroundCollection();  // blocks until bgLoop iteration completes (~1s)
+
+    NwdafAnalyticsEngine engine(col, cfg);
+
+    // With BUG-02 fixed, qosSustainability() only reads the EWMA — never writes.
+    // Calling it repeatedly with the same frozen collector state must yield
+    // identical predictions every time.
+    json r1 = engine.compute("QoS_SUSTAINABILITY");
+    json r2 = engine.compute("QoS_SUSTAINABILITY");
+    json r3 = engine.compute("QoS_SUSTAINABILITY");
+
+    REQUIRE(r1["predictedDlKbps"] == r2["predictedDlKbps"]);
+    REQUIRE(r2["predictedDlKbps"] == r3["predictedDlKbps"]);
+    REQUIRE(r1["predictedUlKbps"] == r2["predictedUlKbps"]);
+    REQUIRE(r2["predictedUlKbps"] == r3["predictedUlKbps"]);
 }
 
 TEST_CASE("IsolationForest: outliers score lower than inliers") {

@@ -71,3 +71,21 @@ std::pair<uint64_t,uint64_t> MockNwdafCollector::readNetStats(const std::string&
 int MockNwdafCollector::querySubscriberCountFromMongo() {
     return mock_subscriber_count_;
 }
+
+// BUG-01: injectable clock
+void MockNwdafCollector::setMockCpuTime(std::chrono::steady_clock::time_point t) {
+    mock_cpu_now_ = t;
+    use_mock_cpu_now_ = true;
+}
+
+void MockNwdafCollector::advanceMockCpuTime(std::chrono::steady_clock::duration d) {
+    mock_cpu_now_ += d;
+}
+
+std::chrono::steady_clock::time_point MockNwdafCollector::getCpuNow() const {
+    return use_mock_cpu_now_ ? mock_cpu_now_ : std::chrono::steady_clock::now();
+}
+
+double MockNwdafCollector::testComputeCpuPct(int pid) {
+    return computeCpuPct(pid);
+}

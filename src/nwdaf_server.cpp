@@ -198,14 +198,11 @@ void NwdafServer::handleListSubscriptions(const httplib::Request&, httplib::Resp
 }
 
 void NwdafServer::handleTrainModel(const httplib::Request&, httplib::Response& res) {
+    // BUG-04: use explicit retrain() which always fits and returns training status,
+    // rather than compute("ABNORMAL_BEHAVIOUR") which only fits once and wastes compute.
     try {
-        json result = engine_.compute("ABNORMAL_BEHAVIOUR");
-        json response = {
-            {"status",  "trained"},
-            {"message", "Isolation Forest (re)trained on current throughput history"},
-            {"ts",      nowISO()}
-        };
-        res.set_content(response.dump(), "application/json");
+        json result = engine_.retrain();
+        res.set_content(result.dump(), "application/json");
         res.status = 200;
     } catch (const std::exception& e) {
         res.set_content(errorResponse(500, "Training failed", e.what()).dump(), "application/json");

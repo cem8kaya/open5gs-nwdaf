@@ -26,7 +26,9 @@ static std::string nowISO() {
 }
 
 NwdafCollector::NwdafCollector(const NwdafConfig& config)
-    : config_(config)
+    : config_(config),
+      dl_ewma_(config.ewma_alpha),
+      ul_ewma_(config.ewma_alpha)
 {
     initMongo();
 }
@@ -38,9 +40,12 @@ NwdafCollector::~NwdafCollector() {
 void NwdafCollector::initMongo() {
 #ifdef NWDAF_HAS_MONGODB
     try {
-        mongocxx::instance::current(); // may throw if not initialized
+        // BUG-05: static instance created exactly once per process lifetime;
+        // mongocxx::instance::current() would throw if called before construction.
+        static mongocxx::instance instance{};
         mongo_client_ = std::make_unique<mongocxx::client>(
             mongocxx::uri{config_.mongodb_uri});
+        spdlog::info("MongoDB connected: {}", config_.mongodb_uri);
     } catch (const std::exception& e) {
         spdlog::warn("MongoDB init failed: {} — subscriber count will return 0", e.what());
     }
@@ -123,6 +128,36 @@ long NwdafCollector::readProcMemKb(int pid) {
         }
     }
     return 0;
+}
+
+// ── BUG-01: rate-based CPU helpers ───────────────────────────────────────────
+
+std::chrono::steady_clock::time_point NwdafCollector::getCpuNow() const {
+    return std::chrono::steady_clock::now();
+}
+
+double NwdafCollector::computeCpuPct(int pid) {
+    auto [utime, stime] = readProcStat(pid);
+    long total_ticks = utime + stime;
+    auto now = getCpuNow();
+
+    auto it = cpu_snapshots_.find(pid);
+    if (it == cpu_snapshots_.end()) {
+        cpu_snapshots_[pid] = {total_ticks, now};
+        return 0.0;  // no baseline yet — first observation
+    }
+
+    auto elapsed_s = std::chrono::duration<double>(now - it->second.ts).count();
+    if (elapsed_s < 0.01) {
+        return 0.0;  // guard against near-zero elapsed (clock resolution)
+    }
+
+    long sc = sysconf(_SC_CLK_TCK);
+    if (sc <= 0) sc = 100;
+
+    double pct = 100.0 * (double)(total_ticks - it->second.ticks) / (elapsed_s * (double)sc);
+    cpu_snapshots_[pid] = {total_ticks, now};
+    return std::min(100.0, std::max(0.0, pct));
 }
 
 // ── /sys/class/net helpers ────────────────────────────────────────────────────
@@ -280,11 +315,12 @@ std::vector<NfMetric> NwdafCollector::collectNfLoad() {
             auto [utime, stime] = readProcStat(m.pid);
             long sc = sysconf(_SC_CLK_TCK);
             if (sc <= 0) sc = 100;
-            m.cpu_seconds = (double)(utime + stime) / (double)sc;
+            m.cpu_seconds = (double)(utime + stime) / (double)sc;  // cumulative, for nfCpuUsage
             m.mem_kb = readProcMemKb(m.pid);
+            m.load_pct = computeCpuPct(m.pid);  // BUG-01: instantaneous rate, not cumulative
+        } else {
+            m.load_pct = 0.0;
         }
-
-        m.load_pct = std::min(100.0, m.cpu_seconds / 10.0);
         if      (m.load_pct > 80) m.load_label = "OVERLOADED";
         else if (m.load_pct > 60) m.load_label = "HIGH";
         else if (m.load_pct > 30) m.load_label = "MEDIUM";
@@ -347,6 +383,10 @@ void NwdafCollector::bgLoop() {
                     if ((int)smf_events_.size() > 1000) smf_events_.pop_front();
                 }
                 nf_metrics_ = nf;
+                // BUG-02: update EWMA exactly once per collection interval here,
+                // never in the analytics read path.
+                dl_ewma_.update(tp.total_dl_kbps);
+                ul_ewma_.update(tp.total_ul_kbps);
             }
         } catch (const std::exception& e) {
             spdlog::error("Background collection error: {}", e.what());
@@ -356,6 +396,18 @@ void NwdafCollector::bgLoop() {
         for (int i = 0; i < config_.collection_interval_seconds && running_; ++i)
             std::this_thread::sleep_for(std::chrono::seconds(1));
     }
+}
+
+// ── BUG-02: EWMA prediction accessors ────────────────────────────────────────
+
+double NwdafCollector::getDlEwmaPrediction() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return dl_ewma_.predict();
+}
+
+double NwdafCollector::getUlEwmaPrediction() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return ul_ewma_.predict();
 }
 
 // ── Thread-safe accessors ─────────────────────────────────────────────────────
