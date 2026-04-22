@@ -34,6 +34,17 @@ std::string NwdafAnalyticsEngine::nowISO() const {
     return buf;
 }
 
+// ── ARCH-01: data-quality-driven confidence ───────────────────────────────────
+
+double NwdafAnalyticsEngine::computeConfidence(int data_points, int min_points,
+                                               int max_points,
+                                               double baseline_quality)
+{
+    if (data_points < min_points) return 0.0;
+    double coverage = std::min(1.0, (double)data_points / (double)max_points);
+    return std::round(baseline_quality * coverage * 95.0);  // max 95% for any model
+}
+
 // ── COMP-04: time window helpers ──────────────────────────────────────────────
 
 std::chrono::system_clock::time_point NwdafAnalyticsEngine::parseISO(const std::string& ts) {
@@ -119,13 +130,13 @@ void NwdafAnalyticsEngine::loadModels() {
         anomaly_model_.load(path);
         spdlog::info("Loaded anomaly model from {}", path);
     } catch (...) {
-        spdlog::info("No pre-trained anomaly model found — operating in rule-based mode");
+        // ARCH-02: dimension mismatch (old 2-D file) also lands here — safe to ignore
+        spdlog::info("No compatible anomaly model found — operating in rule-based mode");
     }
 }
 
 void NwdafAnalyticsEngine::saveModels() {
     // PROD-07: write-then-rename so a mid-write crash never leaves a corrupt file.
-    // std::filesystem::rename() is atomic when src and dst are on the same filesystem.
     std::string final_path = config_.model_dir + "/isolation_forest.json";
     std::string tmp_path   = final_path + ".tmp." + std::to_string(getpid());
     try {
@@ -136,7 +147,7 @@ void NwdafAnalyticsEngine::saveModels() {
     } catch (const std::exception& e) {
         spdlog::warn("Failed to save anomaly model: {}", e.what());
         std::error_code ec;
-        std::filesystem::remove(tmp_path, ec);  // best-effort cleanup of partial write
+        std::filesystem::remove(tmp_path, ec);
     }
 }
 
@@ -167,19 +178,41 @@ json NwdafAnalyticsEngine::retrain() {
         };
     }
 
-    std::vector<std::array<double,2>> X;
+    // ARCH-02: build 5-feature training vectors
+    // Context features are current snapshots — same value across all training
+    // samples, providing a reference for the current operating point.
+    auto nf_metrics = collector_.getCachedNfMetrics();
+    double nf_load_avg = 0.0;
+    if (!nf_metrics.empty()) {
+        for (const auto& m : nf_metrics) nf_load_avg += m.load_pct;
+        nf_load_avg /= (double)nf_metrics.size();
+    }
+
+    int active_sessions = collector_.getActivePduSessionCount();
+
+    auto amf_events = collector_.getRecentAmfEvents(500);
+    int auth_failures = 0;
+    for (const auto& e : amf_events)
+        if (e.event_type == "AUTH_FAILURE") ++auth_failures;
+    double window_minutes = (double)hist.size() * config_.collection_interval_seconds / 60.0;
+    double auth_failure_rate = (window_minutes > 0) ? auth_failures / window_minutes : 0.0;
+
+    std::vector<std::array<double,5>> X;
     X.reserve(hist.size());
-    for (const auto& s : hist) X.push_back({s.total_dl_kbps, s.total_ul_kbps});
+    for (const auto& s : hist)
+        X.push_back({s.total_dl_kbps, s.total_ul_kbps,
+                     nf_load_avg, (double)active_sessions, auth_failure_rate});
 
     {
         std::unique_lock<std::shared_mutex> lk(ml_mutex_);
-        anomaly_model_.fit(X);  // always fits, even if already fitted
+        anomaly_model_.fit(X);
     }
     saveModels();
 
     return {
         {"status",     "trained"},
         {"dataPoints", (int)X.size()},
+        {"nFeatures",  5},
         {"ts",         nowISO()}
     };
 }
@@ -210,6 +243,10 @@ json NwdafAnalyticsEngine::nfLoad(const std::string&,
     json load_list = json::array();
     std::vector<std::string> overloaded;
 
+    // ARCH-01: count active NFs for data-quality-driven confidence
+    int total_nf  = (int)metrics.size();
+    int active_nf = 0;
+
     for (const auto& m : metrics) {
         json entry = {
             {"nfType",   m.nf_type},
@@ -223,10 +260,16 @@ json NwdafAnalyticsEngine::nfLoad(const std::string&,
         };
         load_list.push_back(entry);
         if (m.load_label == "OVERLOADED") overloaded.push_back(m.nf_type);
+        if (m.status == "active") ++active_nf;
     }
 
     std::string recommendation = overloaded.empty() ? "STABLE" : "SCALE_OUT";
-    int confidence = overloaded.empty() ? 90 : 75;
+
+    // ARCH-01: confidence driven by fraction of active NFs; degraded 15% when
+    // overloads are present because predictions are less reliable under stress.
+    int confidence = metrics.empty() ? 0
+        : (int)computeConfidence(active_nf, 1, total_nf,
+                                 overloaded.empty() ? 1.0 : 0.85);
 
     return {
         {"analyticsId",    "NF_LOAD"},
@@ -289,7 +332,6 @@ json NwdafAnalyticsEngine::ueCommunication(const std::string& supi,
     double dl_kbps = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
     double ul_kbps = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
 
-    // When SUPI filter active, subscriber count is per-UE (1 if SUPI seen, else 0)
     int subscribers = supi.empty() ? collector_.getSubscriberCount()
                                    : (!smf.empty() ? 1 : 0);
 
@@ -314,8 +356,6 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
                                               const std::string& start_ts,
                                               const std::string& end_ts) {
     // COMP-03: per-UE mode — use SMF event pattern analysis when SUPI is specified.
-    // Network-wide throughput (gtp5g) cannot be decomposed per-UE, so we fall back to
-    // SMF session-behaviour heuristics in this path.
     if (!supi.empty()) {
         auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
         smf = filterSmfBySupi(smf, supi);
@@ -324,7 +364,6 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
             if      (e.event_type == "PDU_ESTABLISHED") ++est;
             else if (e.event_type == "PDU_RELEASED")    ++rel;
         }
-        // Heuristic: rapid-fire PDU establishment or asymmetric est/rel ratio is suspicious
         bool anomaly = (est > 10) || (est > 0 && rel == 0 && est > 3);
         return {
             {"analyticsId",    "ABNORMAL_BEHAVIOUR"},
@@ -382,10 +421,29 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
         };
     }
 
-    // Build feature matrix
-    std::vector<std::array<double,2>> X;
+    // ARCH-02: build 5-feature matrix — adds NF load, session count, and auth
+    // failure rate to the per-sample throughput features.
+    auto nf_metrics = collector_.getCachedNfMetrics();
+    double nf_load_avg = 0.0;
+    if (!nf_metrics.empty()) {
+        for (const auto& m : nf_metrics) nf_load_avg += m.load_pct;
+        nf_load_avg /= (double)nf_metrics.size();
+    }
+
+    int active_sessions = collector_.getActivePduSessionCount();
+
+    auto amf_events = collector_.getRecentAmfEvents(500);
+    int auth_failures = 0;
+    for (const auto& e : amf_events)
+        if (e.event_type == "AUTH_FAILURE") ++auth_failures;
+    double window_minutes = (double)n * config_.collection_interval_seconds / 60.0;
+    double auth_failure_rate = (window_minutes > 0) ? auth_failures / window_minutes : 0.0;
+
+    std::vector<std::array<double,5>> X;
     X.reserve(n);
-    for (const auto& s : hist) X.push_back({s.total_dl_kbps, s.total_ul_kbps});
+    for (const auto& s : hist)
+        X.push_back({s.total_dl_kbps, s.total_ul_kbps,
+                     nf_load_avg, (double)active_sessions, auth_failure_rate});
 
     // BUG-03: exclusive lock for fit; shared lock for predict/score
     bool just_fitted = false;
@@ -396,7 +454,7 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
             just_fitted = true;
         }
     }
-    if (just_fitted) saveModels();  // I/O outside lock; only happens once (first call)
+    if (just_fitted) saveModels();
 
     std::vector<int> preds;
     std::vector<double> scores;
@@ -419,8 +477,13 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
     double avg_score = anomaly_indices.empty() ? 0.0 : score_sum / anomaly_indices.size();
 
     std::string anomaly_type = "SUSPICION_OF_DDOS_ATTACK";
-    if      (dl_std > 50)         anomaly_type = "UNEXPECTED_LARGE_RATE";
-    else if (anomaly_pct > 20)    anomaly_type = "UNEXPECTED_WAKEUP";
+    if      (dl_std > 50)      anomaly_type = "UNEXPECTED_LARGE_RATE";
+    else if (anomaly_pct > 20) anomaly_type = "UNEXPECTED_WAKEUP";
+
+    // ARCH-01: confidence driven by data coverage; penalised when model is not
+    // yet fitted from a warm start (uses rule-based threshold instead of trained one).
+    int confidence = (int)computeConfidence(n, config_.anomaly_min_samples, 360,
+                                            anomaly_model_.isFitted() ? 1.0 : 0.7);
 
     return {
         {"analyticsId",    "ABNORMAL_BEHAVIOUR"},
@@ -432,7 +495,7 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
         {"avgAnomalyScore", avg_score},
         {"dataPoints",     n},
         {"baselineDlStd",  dl_std},
-        {"confidence",     92}
+        {"confidence",     confidence}
     };
 }
 
@@ -441,8 +504,7 @@ json NwdafAnalyticsEngine::abnormalBehaviour(const std::string& supi,
 json NwdafAnalyticsEngine::qosSustainability(const std::string& supi,
                                               const std::string& start_ts,
                                               const std::string& end_ts) {
-    // BUG-02: EWMA state is updated solely in NwdafCollector::bgLoop.
-    // Read predictions here without mutating shared state — makes this call idempotent.
+    // BUG-02: EWMA state updated solely in NwdafCollector::bgLoop — read-only here.
     auto hist = filterByWindow(collector_.getThroughputHistory(1), start_ts, end_ts);
     double cur_dl = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
     double cur_ul = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
@@ -509,7 +571,6 @@ json NwdafAnalyticsEngine::serviceExperience(const std::string& supi,
     else if (mos > 3.5) category = "GOOD";
     else if (mos > 2.5) category = "FAIR";
 
-    // COMP-03: filter SMF events by SUPI and time window for per-UE session ratio
     auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
     smf = filterSmfBySupi(smf, supi);
 
@@ -555,18 +616,16 @@ json NwdafAnalyticsEngine::networkPerformance(const std::string&,
     auto hist = filterByWindow(collector_.getThroughputHistory(1), start_ts, end_ts);
     double dl_kbps = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
 
-    auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
-    int est = 0, rel = 0;
-    for (const auto& e : smf) {
-        if      (e.event_type == "PDU_ESTABLISHED") ++est;
-        else if (e.event_type == "PDU_RELEASED")    ++rel;
-    }
-    int active_sessions = std::max(0, est - rel);
+    // ARCH-04: use stateful session tracker instead of log-derived est-rel delta
+    int active_sessions = collector_.getActivePduSessionCount();
 
     double dl_score  = std::min(100.0, dl_kbps / 10.0);
     double pdu_score = std::min(100.0, (double)active_sessions * 20.0);
 
-    double overall = 0.6 * nf_health + 0.2 * dl_score + 0.2 * pdu_score;
+    // ARCH-03: configurable weights from config (validated to sum to 1.0 at load time)
+    double overall = config_.np_weight_nf_health * nf_health
+                   + config_.np_weight_dl        * dl_score
+                   + config_.np_weight_pdu       * pdu_score;
 
     std::string label = "POOR";
     if      (overall > 90) label = "EXCELLENT";

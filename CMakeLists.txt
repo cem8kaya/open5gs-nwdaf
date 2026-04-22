@@ -4,9 +4,12 @@ project(open5gs-nwdaf VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-option(NWDAF_USE_SD_JOURNAL      "Use libsystemd sd-journal API (requires systemd dev headers)" ON)
-option(NWDAF_BUILD_TESTS         "Build unit and integration tests" ON)
+option(NWDAF_USE_SD_JOURNAL       "Use libsystemd sd-journal API (requires systemd dev headers)" ON)
+option(NWDAF_BUILD_TESTS          "Build unit and integration tests" ON)
 option(NWDAF_ENABLE_PUSH_DELIVERY "Enable subscription push delivery background thread (COMP-01)" ON)
+# ARCH-05: TLS / mTLS for SBI interface (TS 33.501 §13.3).
+# Requires OpenSSL dev headers; cpp-httplib uses CPPHTTPLIB_OPENSSL_SUPPORT.
+option(NWDAF_USE_TLS              "Enable TLS for SBI (requires OpenSSL)" OFF)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 find_package(PkgConfig REQUIRED)
@@ -61,6 +64,13 @@ else()
     message(WARNING "MongoDB C++ driver not found — subscriber count disabled (returns 0)")
 endif()
 
+# ARCH-05: OpenSSL (optional) — TLS for SBI interface
+if(NWDAF_USE_TLS)
+    find_package(OpenSSL REQUIRED)
+    add_compile_definitions(NWDAF_USE_TLS)
+    message(STATUS "TLS enabled — SBI will use httplib::SSLServer (OpenSSL)")
+endif()
+
 # SQLite3 (optional) — PROD-01 throughput persistence + PROD-02 subscription persistence
 find_package(SQLite3 QUIET)
 if(SQLite3_FOUND)
@@ -106,6 +116,11 @@ target_link_libraries(nwdaf_lib PUBLIC
 if(NWDAF_USE_SD_JOURNAL)
     target_link_libraries(nwdaf_lib PUBLIC ${SYSTEMD_LIBRARIES})
     target_include_directories(nwdaf_lib PUBLIC ${SYSTEMD_INCLUDE_DIRS})
+endif()
+
+if(NWDAF_USE_TLS)
+    target_compile_definitions(nwdaf_lib PUBLIC CPPHTTPLIB_OPENSSL_SUPPORT)
+    target_link_libraries(nwdaf_lib PUBLIC OpenSSL::SSL OpenSSL::Crypto)
 endif()
 
 if(mongocxx_FOUND)

@@ -13,6 +13,7 @@
 #include <utility>
 #include <chrono>
 #include <functional>
+#include <unordered_set>
 
 #ifdef NWDAF_HAS_MONGODB
 #include <mongocxx/client.hpp>
@@ -33,6 +34,8 @@ struct AmfEvent {
 struct SmfEvent {
     std::string event_type;
     std::string supi;
+    // ARCH-04: opaque session key (SUPI or SUPI+DNN) used by the stateful tracker
+    std::string session_id;
     std::string raw_line;
     std::string timestamp_iso;
 };
@@ -82,6 +85,9 @@ public:
     double getDlEwmaPrediction() const;
     double getUlEwmaPrediction() const;
 
+    // ARCH-04: stateful PDU session count (survives log rotation / service restart)
+    int getActivePduSessionCount() const;
+
 protected:
     virtual std::vector<std::string> readJournalLines(const std::string& unit, int n);
     virtual std::pair<long,long>     readProcStat(int pid);
@@ -114,6 +120,10 @@ private:
     // BUG-02: EWMA predictors updated once per collection interval
     EwmaPredictor dl_ewma_;
     EwmaPredictor ul_ewma_;
+
+    // ARCH-04: stateful PDU session tracker — persists across log rotation.
+    // Keyed by session_id (= SUPI, or SUPI+DNN when extractable).
+    std::unordered_set<std::string> active_sessions_;
 
     // PROD-08: pre-snapshot for non-blocking throughput measurement
     struct NetSnapshot {
