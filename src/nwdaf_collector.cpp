@@ -245,7 +245,8 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
             ev.event_type = "PDU_ESTABLISHED";
         else if (line.find("PDU Session Release") != std::string::npos ||
                  line.find("pdu session release") != std::string::npos ||
-                 line.find("[Released]") != std::string::npos)
+                 line.find("[Released]") != std::string::npos ||
+                 line.find("[Removed]") != std::string::npos)   // ARCH-04: Open5GS v2.7.6
             ev.event_type = "PDU_RELEASED";
         else if (line.find("QoS Flow") != std::string::npos ||
                  line.find("qos flow") != std::string::npos)
@@ -254,8 +255,10 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
             continue;
 
         std::smatch m;
-        if (std::regex_search(line, m, supi_re))
-            ev.supi = "imsi-" + m[1].str();
+        if (std::regex_search(line, m, supi_re)) {
+            ev.supi       = "imsi-" + m[1].str();
+            ev.session_id = ev.supi;   // ARCH-04: use SUPI as session key
+        }
 
         events.push_back(std::move(ev));
     }
@@ -492,6 +495,14 @@ void NwdafCollector::bgLoop() {
                 for (auto& e : smf) {
                     smf_events_.push_back(e);
                     if ((int)smf_events_.size() > 1000) smf_events_.pop_front();
+                    // ARCH-04: maintain stateful PDU session set so the count
+                    // survives log rotation and service restarts.
+                    if (!e.session_id.empty()) {
+                        if (e.event_type == "PDU_ESTABLISHED")
+                            active_sessions_.insert(e.session_id);
+                        else if (e.event_type == "PDU_RELEASED")
+                            active_sessions_.erase(e.session_id);
+                    }
                 }
                 nf_metrics_ = nf;
                 // BUG-02: update EWMA exactly once per collection interval here,
@@ -531,6 +542,13 @@ double NwdafCollector::getDlEwmaPrediction() const {
 double NwdafCollector::getUlEwmaPrediction() const {
     std::lock_guard<std::mutex> lk(mutex_);
     return ul_ewma_.predict();
+}
+
+// ── ARCH-04: stateful PDU session count ──────────────────────────────────────
+
+int NwdafCollector::getActivePduSessionCount() const {
+    std::lock_guard<std::mutex> lk(mutex_);
+    return (int)active_sessions_.size();
 }
 
 // ── Thread-safe accessors ─────────────────────────────────────────────────────

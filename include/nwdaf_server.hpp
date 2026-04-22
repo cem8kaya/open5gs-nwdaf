@@ -6,6 +6,7 @@
 #include <httplib.h>
 #include <atomic>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <string>
 
@@ -31,7 +32,9 @@ public:
     std::atomic<uint64_t> notif_failures_{0};
 
 private:
-    httplib::Server svr_;
+    // ARCH-05: unique_ptr allows substituting SSLServer at runtime when
+    // tls_enabled=true without changing the rest of the server code.
+    std::unique_ptr<httplib::Server> svr_;
 
     void setupRoutes();
 
