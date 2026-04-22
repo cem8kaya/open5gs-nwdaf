@@ -11,6 +11,23 @@ NwdafServer::NwdafServer(NwdafAnalyticsEngine& engine,
     : engine_(engine), subs_(subs), config_(config),
       rate_limiter_(config.rate_limit_per_ip_rps, config.rate_limit_global_rps)
 {
+    // ARCH-05: instantiate SSLServer when TLS is enabled and compiled in,
+    // otherwise fall back to plain HTTP.
+#ifdef NWDAF_USE_TLS
+    if (config.tls_enabled) {
+        svr_ = std::make_unique<httplib::SSLServer>(
+            config.tls_cert_file.c_str(), config.tls_key_file.c_str());
+        spdlog::info("TLS enabled: cert={} key={}", config.tls_cert_file, config.tls_key_file);
+    } else {
+        svr_ = std::make_unique<httplib::Server>();
+    }
+#else
+    if (config.tls_enabled) {
+        spdlog::warn("tls_enabled=true but NWDAF_USE_TLS not compiled in — "
+                     "falling back to plain HTTP (rebuild with -DNWDAF_USE_TLS=ON)");
+    }
+    svr_ = std::make_unique<httplib::Server>();
+#endif
     setupRoutes();
 }
 
@@ -40,43 +57,43 @@ static std::string generateShortId() {
 }
 
 void NwdafServer::setupRoutes() {
-    svr_.Get("/nwdaf-analytics/v1/health",
+    svr_->Get("/nwdaf-analytics/v1/health",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleHealth(req, res);
         });
 
-    svr_.Get("/nwdaf-analytics/v1/analytics",
+    svr_->Get("/nwdaf-analytics/v1/analytics",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleGetAnalytics(req, res);
         });
 
-    svr_.Post("/nwdaf-analytics/v1/subscriptions",
+    svr_->Post("/nwdaf-analytics/v1/subscriptions",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleCreateSubscription(req, res);
         });
 
-    svr_.Get("/nwdaf-analytics/v1/subscriptions",
+    svr_->Get("/nwdaf-analytics/v1/subscriptions",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleListSubscriptions(req, res);
         });
 
-    svr_.Get(R"(/nwdaf-analytics/v1/subscriptions/([^/]+))",
+    svr_->Get(R"(/nwdaf-analytics/v1/subscriptions/([^/]+))",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleGetSubscription(req, res);
         });
 
-    svr_.Delete(R"(/nwdaf-analytics/v1/subscriptions/([^/]+))",
+    svr_->Delete(R"(/nwdaf-analytics/v1/subscriptions/([^/]+))",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleDeleteSubscription(req, res);
         });
 
-    svr_.Post("/nwdaf-analytics/v1/train",
+    svr_->Post("/nwdaf-analytics/v1/train",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleTrainModel(req, res);
         });
 
     // PROD-03: Prometheus-format metrics scrape endpoint
-    svr_.Get("/nwdaf-analytics/v1/metrics",
+    svr_->Get("/nwdaf-analytics/v1/metrics",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleMetrics(req, res);
         });
@@ -84,11 +101,11 @@ void NwdafServer::setupRoutes() {
 
 void NwdafServer::start() {
     spdlog::info("NWDAF SBI server starting on {}:{}", config_.sbi_bind_address, config_.sbi_port);
-    svr_.listen(config_.sbi_bind_address.c_str(), config_.sbi_port);
+    svr_->listen(config_.sbi_bind_address.c_str(), config_.sbi_port);
 }
 
 void NwdafServer::stop() {
-    svr_.stop();
+    svr_->stop();
 }
 
 // ── PROD-06: rate-limit helper ────────────────────────────────────────────────

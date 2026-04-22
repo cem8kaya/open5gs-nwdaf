@@ -4,13 +4,13 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <cmath>
 
 static std::string generateUUID() {
     std::random_device rd;
     std::mt19937_64 gen(rd());
     std::uniform_int_distribution<uint64_t> dis;
     uint64_t a = dis(gen), b = dis(gen);
-    // Set version 4 and variant bits
     a = (a & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
     b = (b & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
     std::ostringstream oss;
@@ -43,9 +43,8 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     cfg.sbi_port          = n["sbi_port"]          ? n["sbi_port"].as<int>()                  : 7779;
 
     if (n["nf_service_names"]) {
-        for (const auto& kv : n["nf_service_names"]) {
+        for (const auto& kv : n["nf_service_names"])
             cfg.nf_service_names[kv.first.as<std::string>()] = kv.second.as<std::string>();
-        }
     } else {
         cfg.nf_service_names = {{"AMF","amfd"},{"SMF","smfd"},{"UPF","upfd"},
                                  {"AUSF","ausfd"},{"UDM","udmd"},{"PCF","pcfd"},
@@ -68,13 +67,13 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     cfg.mongodb_uri = n["mongodb_uri"] ? n["mongodb_uri"].as<std::string>() : "mongodb://127.0.0.1:27017";
     cfg.mongodb_db  = n["mongodb_db"]  ? n["mongodb_db"].as<std::string>()  : "open5gs";
 
-    cfg.nrf_uri                          = n["nrf_uri"]                          ? n["nrf_uri"].as<std::string>()               : "http://127.0.0.1:7777";
-    cfg.nrf_register_on_startup          = n["nrf_register_on_startup"]          ? n["nrf_register_on_startup"].as<bool>()       : true;
-    cfg.nrf_heartbeat_interval_seconds   = n["nrf_heartbeat_interval_seconds"]   ? n["nrf_heartbeat_interval_seconds"].as<int>() : 60;
+    cfg.nrf_uri                        = n["nrf_uri"]                        ? n["nrf_uri"].as<std::string>()               : "http://127.0.0.1:7777";
+    cfg.nrf_register_on_startup        = n["nrf_register_on_startup"]        ? n["nrf_register_on_startup"].as<bool>()       : true;
+    cfg.nrf_heartbeat_interval_seconds = n["nrf_heartbeat_interval_seconds"] ? n["nrf_heartbeat_interval_seconds"].as<int>() : 60;
 
-    cfg.model_dir                = n["model_dir"]                ? n["model_dir"].as<std::string>()    : "/opt/nwdaf/models";
-    cfg.anomaly_contamination    = n["anomaly_contamination"]    ? n["anomaly_contamination"].as<double>()  : 0.10;
-    cfg.anomaly_min_samples      = n["anomaly_min_samples"]      ? n["anomaly_min_samples"].as<int>()       : 10;
+    cfg.model_dir                = n["model_dir"]                ? n["model_dir"].as<std::string>()       : "/opt/nwdaf/models";
+    cfg.anomaly_contamination    = n["anomaly_contamination"]    ? n["anomaly_contamination"].as<double>() : 0.10;
+    cfg.anomaly_min_samples      = n["anomaly_min_samples"]      ? n["anomaly_min_samples"].as<int>()      : 10;
     cfg.baseline_stddev_min_kbps = n["baseline_stddev_min_kbps"] ? n["baseline_stddev_min_kbps"].as<double>() : 0.5;
     cfg.ewma_alpha               = n["ewma_alpha"]               ? n["ewma_alpha"].as<double>()             : 0.3;
 
@@ -82,12 +81,31 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     cfg.log_file  = n["log_file"]  ? n["log_file"].as<std::string>()  : "/var/log/open5gs/nwdaf.log";
 
     // PROD-01
-    cfg.history_backend  = n["history_backend"]  ? n["history_backend"].as<std::string>()  : "none";
-    cfg.history_db_path  = n["history_db_path"]  ? n["history_db_path"].as<std::string>()  : "/opt/nwdaf/history.db";
+    cfg.history_backend = n["history_backend"] ? n["history_backend"].as<std::string>() : "none";
+    cfg.history_db_path = n["history_db_path"] ? n["history_db_path"].as<std::string>() : "/opt/nwdaf/history.db";
 
     // PROD-06
     cfg.rate_limit_per_ip_rps = n["rate_limit_per_ip_rps"] ? n["rate_limit_per_ip_rps"].as<int>() : 10;
     cfg.rate_limit_global_rps = n["rate_limit_global_rps"] ? n["rate_limit_global_rps"].as<int>() : 100;
+
+    // ARCH-03: configurable NETWORK_PERFORMANCE weights
+    if (n["network_performance_weights"]) {
+        auto w = n["network_performance_weights"];
+        cfg.np_weight_nf_health = w["nf_health"] ? w["nf_health"].as<double>() : 0.6;
+        cfg.np_weight_dl        = w["dl_score"]  ? w["dl_score"].as<double>()  : 0.2;
+        cfg.np_weight_pdu       = w["pdu_score"] ? w["pdu_score"].as<double>() : 0.2;
+    }
+    // Validate that the weights sum to 1.0 (±0.001)
+    double weight_sum = cfg.np_weight_nf_health + cfg.np_weight_dl + cfg.np_weight_pdu;
+    if (std::abs(weight_sum - 1.0) > 0.001)
+        throw std::runtime_error(
+            "network_performance_weights must sum to 1.0, got " + std::to_string(weight_sum));
+
+    // ARCH-05: TLS / mTLS configuration
+    cfg.tls_enabled   = n["tls_enabled"]   ? n["tls_enabled"].as<bool>()          : false;
+    cfg.tls_cert_file = n["tls_cert_file"] ? n["tls_cert_file"].as<std::string>() : "/etc/open5gs/tls/nwdaf.pem";
+    cfg.tls_key_file  = n["tls_key_file"]  ? n["tls_key_file"].as<std::string>()  : "/etc/open5gs/tls/nwdaf.key";
+    cfg.tls_ca_file   = n["tls_ca_file"]   ? n["tls_ca_file"].as<std::string>()   : "/etc/open5gs/tls/ca.pem";
 
     return cfg;
 }
