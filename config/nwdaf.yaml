@@ -65,3 +65,16 @@ nwdaf:
   # Set to 0 to disable the respective limit
   rate_limit_per_ip_rps: 10         # max requests/s from a single client IP
   rate_limit_global_rps: 100        # max total requests/s across all clients
+
+  # ARCH-03: NETWORK_PERFORMANCE scoring weights (must sum to 1.0 ± 0.001)
+  network_performance_weights:
+    nf_health: 0.6   # fraction of NFs in active state
+    dl_score:  0.2   # downlink throughput score (capped at 100)
+    pdu_score: 0.2   # active PDU session score  (capped at 100)
+
+  # ARCH-05: TLS / mTLS for SBI interface (TS 33.501 §13.3)
+  # Requires rebuilding with:  cmake -DNWDAF_USE_TLS=ON ..
+  tls_enabled: false
+  tls_cert_file: "/etc/open5gs/tls/nwdaf.pem"
+  tls_key_file:  "/etc/open5gs/tls/nwdaf.key"
+  tls_ca_file:   "/etc/open5gs/tls/ca.pem"   # optional — enables mTLS client verification
