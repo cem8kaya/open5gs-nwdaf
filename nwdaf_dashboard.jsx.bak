@@ -18,7 +18,7 @@ const ANALYTICS_IDS = [
   { id: 'UE_MOBILITY', name: 'UE Mobility', icon: Smartphone, ref: 'TS 23.288 §6.7' },
   { id: 'UE_COMMUNICATION', name: 'UE Communication', icon: Radio, ref: 'TS 23.288 §6.6' },
   { id: 'ABNORMAL_BEHAVIOUR', name: 'Abnormal Behaviour', icon: ShieldAlert, ref: 'TS 23.288 §6.4' },
-  { id: 'QoS_SUSTAINABILITY', name: 'QoS Sustainability', icon: Activity, ref: 'TS 23.288 §6.9' },
+  { id: 'QOS_SUSTAINABILITY', name: 'QoS Sustainability', icon: Activity, ref: 'TS 23.288 §6.9' },
   { id: 'SERVICE_EXPERIENCE', name: 'Service Experience', icon: Zap, ref: 'TS 23.288 §6.8' },
   { id: 'NETWORK_PERFORMANCE', name: 'Network Performance', icon: Wifi, ref: 'TS 23.288 §6.6a' }
 ];
