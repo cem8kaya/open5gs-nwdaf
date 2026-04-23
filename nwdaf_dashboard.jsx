@@ -174,7 +174,7 @@ const ApiProvider = ({ children }) => {
         const res = await fetch(url.toString(), {
           method,
           headers: { 
-            "X-Request-Id": crypto.randomUUID().substring(0, 8),
+            "X-Request-Id": Math.random().toString(36).substring(2, 10),
             ...(body ? { "Content-Type": "application/json" } : {})
           },
           body: body ? JSON.stringify(body) : undefined,
