@@ -5,7 +5,7 @@ import {
   ComposedChart, ScatterChart, Scatter, ZAxis
 } from 'recharts';
 import {
-  Activity, Server, AlertTriangle, CheckCircle, Clock,
+  Activity, ActivitySquare, Server, AlertTriangle, CheckCircle, Clock,
   Settings, Menu, X, Plus, Trash2, Download, RefreshCw, Play, Square,
   RotateCcw, Copy, Info, Navigation, Radio, Smartphone, Zap, ShieldAlert,
   Wifi, BarChart3, Database, Home, HelpCircle, Share2, Terminal
