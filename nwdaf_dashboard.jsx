@@ -166,7 +166,7 @@ const ApiProvider = ({ children }) => {
   const api = useMemo(() => {
     const baseUrl = settings.baseUrl || DEFAULT_BASE_URL;
     
-    const request = async (method, path, params = {}, body = null) => {
+    const request = async (method, path, params = {}, body = null, silent = false) => {
       const url = new URL(baseUrl + path);
       Object.entries(params).forEach(([k, v]) => url.searchParams.set(k, v));
       
@@ -209,10 +209,10 @@ const ApiProvider = ({ children }) => {
           throw err;
         }
         if (err instanceof ApiError) {
-          showToast('error', `[${err.status}] ${err.message}: ${err.cause}`);
+          if (!silent) showToast('error', `[${err.status}] ${err.message}: ${err.cause}`);
           throw err;
         }
-        showToast('error', err.message);
+        if (!silent) showToast('error', err.message);
         throw err;
       }
     };
@@ -224,7 +224,7 @@ const ApiProvider = ({ children }) => {
       
       health: () => request('GET', '/health'),
       analytics: (id, supi) => request('GET', '/analytics', { analyticsId: id, ...(supi && { supi }) }),
-      metrics: () => request('GET', '/metrics').then(parsePrometheus),
+      metrics: () => request('GET', '/metrics', {}, null, true).then(parsePrometheus),
       train: () => request('POST', '/train'),
       subscriptions: {
         list: () => request('GET', '/subscriptions'),
@@ -658,6 +658,33 @@ const AnalyticsPage = ({ analyticsId }) => {
       }
 
       // Add simple fallbacks for others for brevity, but matching specs
+      case 'QoS_SUSTAINABILITY': {
+        const dl = ad.avgDlKbps || 0;
+        const ul = ad.avgUlKbps || 0;
+        return (
+          <div className="flex flex-col sm:flex-row gap-6 justify-center">
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50 flex-1 flex flex-col items-center">
+              <div className="text-sm text-gray-400 mb-2 font-semibold tracking-wider">DOWNLINK (Avg)</div>
+              <div className="text-4xl font-bold font-mono text-blue-400 mb-1">{dl.toFixed(2)}</div>
+              <div className="text-xs text-blue-500 font-mono">Kbps</div>
+            </div>
+            
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50 flex-1 flex flex-col items-center relative overflow-hidden">
+              <div className="absolute top-0 w-full h-1 bg-gradient-to-r from-emerald-500 to-teal-400"></div>
+              <div className="text-sm text-gray-400 mb-2 font-semibold tracking-wider">SUSTAINABILITY</div>
+              <div className="text-5xl font-bold font-mono text-emerald-400 my-2">{ad.confidence || 0}%</div>
+              <div className="text-xs text-gray-500 font-mono mt-1">CONFIDENCE SCORE</div>
+            </div>
+            
+            <div className="bg-gray-800/50 p-6 rounded-xl border border-gray-700/50 flex-1 flex flex-col items-center">
+              <div className="text-sm text-gray-400 mb-2 font-semibold tracking-wider">UPLINK (Avg)</div>
+              <div className="text-4xl font-bold font-mono text-amber-400 mb-1">{ul.toFixed(2)}</div>
+              <div className="text-xs text-amber-500 font-mono">Kbps</div>
+            </div>
+          </div>
+        );
+      }
+
       default:
         return (
           <div className="p-8 text-center text-gray-500 border border-gray-800 bg-gray-900/50">
