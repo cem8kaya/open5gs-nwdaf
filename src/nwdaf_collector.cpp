@@ -349,10 +349,9 @@ std::vector<NfMetric> NwdafCollector::collectNfLoad() {
         } else {
             m.load_pct = 0.0;
         }
-        if      (m.load_pct > 80) m.load_label = "OVERLOADED";
-        else if (m.load_pct > 60) m.load_label = "HIGH";
-        else if (m.load_pct > 30) m.load_label = "MEDIUM";
-        else                      m.load_label = "LOW";
+        if      (m.load_pct >= 60) m.load_label = "HIGH";
+        else if (m.load_pct >= 20) m.load_label = "MEDIUM";
+        else                       m.load_label = "LOW";
 
         metrics.push_back(std::move(m));
     }

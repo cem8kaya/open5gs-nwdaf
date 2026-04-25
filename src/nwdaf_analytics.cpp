@@ -170,11 +170,49 @@ void NwdafAnalyticsEngine::updateConfig(double anomaly_contamination) {
 // BUG-04: explicit retrain — always calls fit(), regardless of isFitted() state
 json NwdafAnalyticsEngine::retrain() {
     auto hist = collector_.getThroughputHistory(360);
-    if ((int)hist.size() < config_.anomaly_min_samples) {
+    int data_points = (int)hist.size();
+
+    // Quality gate: require minimum sample count (~20 min at 10s interval)
+    constexpr int MIN_SAMPLES = 120;
+    constexpr double MIN_VARIANCE_KBPS = 0.5;
+
+    if (data_points < MIN_SAMPLES) {
+        return {
+            {"status",     "INSUFFICIENT_DATA"},
+            {"dataPoints", data_points},
+            {"required",   MIN_SAMPLES},
+            {"message",    "Collect more traffic data before training"}
+        };
+    }
+
+    // Quality gate: require at least some traffic variation
+    std::vector<double> dl_vals, ul_vals;
+    for (const auto& s : hist) {
+        dl_vals.push_back(s.total_dl_kbps);
+        ul_vals.push_back(s.total_ul_kbps);
+    }
+    auto stddev = [](const std::vector<double>& v) {
+        double mean = std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+        double var = 0;
+        for (double x : v) var += (x - mean) * (x - mean);
+        return std::sqrt(var / v.size());
+    };
+    double dl_std = stddev(dl_vals);
+    double ul_std = stddev(ul_vals);
+    if (dl_std < MIN_VARIANCE_KBPS && ul_std < MIN_VARIANCE_KBPS) {
+        return {
+            {"status",  "BASELINE_TOO_LOW"},
+            {"dlStd",   dl_std},
+            {"ulStd",   ul_std},
+            {"message", "No traffic variation — run UE traffic scenarios first"}
+        };
+    }
+
+    if (data_points < config_.anomaly_min_samples) {
         return {
             {"status",     "skipped"},
             {"reason",     "INSUFFICIENT_DATA"},
-            {"dataPoints", (int)hist.size()}
+            {"dataPoints", data_points}
         };
     }
 
@@ -252,7 +290,7 @@ json NwdafAnalyticsEngine::nfLoad(const std::string&,
             {"nfType",   m.nf_type},
             {"nfStatus", m.status},
             {"nfLoadLevelInfo", {
-                {"nfLoadLevel",      m.load_pct},
+                {"nfLoadLevel",      m.load_pct / 100.0},
                 {"nfLoadLevelLabel", m.load_label},
                 {"nfCpuUsage",       m.cpu_seconds},
                 {"nfMemoryUsage",    m.mem_kb}
@@ -271,12 +309,20 @@ json NwdafAnalyticsEngine::nfLoad(const std::string&,
         : (int)computeConfidence(active_nf, 1, total_nf,
                                  overloaded.empty() ? 1.0 : 0.85);
 
+    // Derive nfHealthSummary from max load level across all NFs
+    double max_load = 0.0;
+    for (const auto& m : metrics) max_load = std::max(max_load, m.load_pct);
+    std::string nf_health_summary = max_load >= 60.0 ? "CRITICAL"
+                                  : max_load >= 20.0 ? "DEGRADED"
+                                  : "HEALTHY";
+
     return {
         {"analyticsId",    "NF_LOAD"},
         {"ts",             nowISO()},
         {"nfLoadLevelList", load_list},
         {"overloadedNfs",  overloaded},
         {"recommendation", recommendation},
+        {"nfHealthSummary", nf_health_summary},
         {"confidence",     confidence}
     };
 }
@@ -527,6 +573,8 @@ json NwdafAnalyticsEngine::qosSustainability(const std::string& supi,
     if      (pred_dl < 10)  violation_risk = "HIGH";
     else if (pred_dl < 50)  violation_risk = "MEDIUM";
 
+    std::string sustainability = pred_dl > 5.0 ? "SUSTAINABLE" : "UNSUSTAINABLE";
+
     json result = {
         {"analyticsId",   "QoS_SUSTAINABILITY"},
         {"ts",            nowISO()},
@@ -537,6 +585,7 @@ json NwdafAnalyticsEngine::qosSustainability(const std::string& supi,
         {"dlTrend",        dl_trend},
         {"ulTrend",        ul_trend},
         {"violationRisk",  violation_risk},
+        {"sustainability", sustainability},
         {"confidence",     80}
     };
 
@@ -632,11 +681,16 @@ json NwdafAnalyticsEngine::networkPerformance(const std::string&,
     else if (overall > 75) label = "GOOD";
     else if (overall > 50) label = "FAIR";
 
+    std::string grade = overall >= 80 ? "A"
+                      : overall >= 60 ? "B"
+                      : overall >= 40 ? "C" : "D";
+
     return {
         {"analyticsId", "NETWORK_PERFORMANCE"},
         {"ts",          nowISO()},
         {"overallScore", overall},
         {"scoreLabel",   label},
+        {"grade",        grade},
         {"components", {
             {"nfHealthScore", nf_health},
             {"dlScore",       dl_score},
