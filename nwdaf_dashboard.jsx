@@ -687,10 +687,17 @@ const AnalyticsPage = ({ analyticsId }) => {
 
       default:
         return (
-          <div className="p-8 text-center text-gray-500 border border-gray-800 bg-gray-900/50">
-            <ActivitySquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
-            <p>Standard visualization rendered for {analyticsId}.</p>
-            <p className="text-sm mt-2 font-mono">{JSON.stringify(ad).substring(0, 100)}...</p>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+            {Object.entries(ad).filter(([k]) => k !== 'analyticsId' && k !== 'timestamp').map(([key, value]) => (
+              <div key={key} className="bg-gray-800/40 p-5 rounded-xl border border-gray-700/50 flex flex-col justify-between hover:border-gray-600 transition-colors">
+                <div className="text-xs text-gray-400 uppercase tracking-widest mb-3 font-semibold break-words">
+                  {key.replace(/([A-Z])/g, ' $1').trim()}
+                </div>
+                <div className="text-2xl font-bold font-mono text-blue-100">
+                  {typeof value === 'object' ? JSON.stringify(value) : (typeof value === 'number' && !Number.isInteger(value) ? value.toFixed(2) : String(value))}
+                </div>
+              </div>
+            ))}
           </div>
         );
     }
