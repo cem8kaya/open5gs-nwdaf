@@ -23,9 +23,7 @@ nwdaf:
   # Data collection — UPF tunnel interfaces for throughput measurement
   # gtp5g bypasses user-space capture; read /sys/class/net directly
   throughput_interfaces:
-    - "ogstun"
-    - "ogstun2"
-    - "ogstun3"
+    - "ogstun"   # single-UE lab setup; ogstun2/3 don't exist
     - "ens4"
   throughput_history_size: 360      # 1 hour at 10s interval
   collection_interval_seconds: 10
@@ -48,7 +46,7 @@ nwdaf:
   # ML
   model_dir: "/opt/nwdaf/models"
   anomaly_contamination: 0.10       # Expected fraction of anomalies
-  anomaly_min_samples: 10           # Minimum samples before Isolation Forest runs
+  anomaly_min_samples: 120          # ~20 min at 10s interval — matches retrain() quality gate
   baseline_stddev_min_kbps: 0.5     # Below this, return BASELINE_TOO_LOW
   ewma_alpha: 0.3                   # EWMA smoothing factor (0=no adaptation, 1=instant)
 
