@@ -1,6 +1,6 @@
 nwdaf:
   # NF identity
-  nf_instance_id: ""          # auto-generated UUID if empty
+  nf_instance_id: "198e9234-b849-42a2-9f70-d9a587616c2b"  # stable — do not regenerate
   plmn_mcc: "999"
   plmn_mnc: "70"
   sbi_bind_address: "127.0.0.1"
@@ -39,7 +39,7 @@ nwdaf:
   mongodb_db:  "open5gs"
 
   # NRF registration + heartbeat (TS 29.510 §5.3.2.4)
-  nrf_uri: "http://127.0.0.1:7777"
+  nrf_uri: "http://127.0.0.10:7777"  # Open5GS NRF binds to 127.0.0.10, not 127.0.0.1
   nrf_register_on_startup: true
   nrf_heartbeat_interval_seconds: 60   # TS 29.510 recommends ≤ 60s; 0 = disabled
 
