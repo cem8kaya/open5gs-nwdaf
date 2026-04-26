@@ -90,9 +90,34 @@ static void setupLogging(const NwdafConfig& cfg) {
     spdlog::set_default_logger(logger);
 }
 
+static int curlHttp2Request(const std::string& method, const std::string& url, const std::string& body) {
+    std::string escaped_body = body;
+    // Basic single quote escape for bash: replace ' with '\''
+    size_t pos = 0;
+    while ((pos = escaped_body.find('\'', pos)) != std::string::npos) {
+        escaped_body.replace(pos, 1, "'\\''");
+        pos += 4;
+    }
+
+    std::string cmd = "curl -s -o /dev/null -w \"%{http_code}\" --http2-prior-knowledge --connect-timeout 3 -X " 
+                    + method + " -H \"Content-Type: application/json\" "
+                    + "-H \"Accept: application/json\" "
+                    + "-d '" + escaped_body + "' \"" + url + "\"";
+    FILE* fp = popen(cmd.c_str(), "r");
+    if (!fp) return -1;
+    char buf[16];
+    if (fgets(buf, sizeof(buf), fp) != nullptr) {
+        try {
+            int status = std::stoi(buf);
+            pclose(fp);
+            return status;
+        } catch (...) {}
+    }
+    pclose(fp);
+    return -1;
+}
+
 static void registerWithNrf(const NwdafConfig& cfg) {
-    httplib::Client cli(cfg.nrf_uri);
-    cli.set_connection_timeout(3);
     using json = nlohmann::json;
     json body = {
         {"nfInstanceId", cfg.nf_instance_id},
@@ -108,12 +133,13 @@ static void registerWithNrf(const NwdafConfig& cfg) {
             {"ipEndPoints",       {{{"ipv4Address", cfg.sbi_bind_address}, {"port", cfg.sbi_port}}}}
         }}}
     };
-    auto res = cli.Put("/nnrf-nfm/v1/nf-instances/" + cfg.nf_instance_id,
-                       body.dump(), "application/json");
-    if (res && res->status == 201)
-        spdlog::info("NRF registration successful");
+    std::string url = cfg.nrf_uri + "/nnrf-nfm/v1/nf-instances/" + cfg.nf_instance_id;
+    int status = curlHttp2Request("PUT", url, body.dump());
+    
+    if (status == 201 || status == 200)
+        spdlog::info("NRF registration successful ({} {})", status, status == 201 ? "Created" : "OK");
     else
-        spdlog::warn("NRF registration failed (status {})", res ? res->status : -1);
+        spdlog::warn("NRF registration failed (status {})", status);
 }
 
 int main(int argc, char* argv[]) {
@@ -182,16 +208,14 @@ int main(int argc, char* argv[]) {
                 if (++elapsed < config.nrf_heartbeat_interval_seconds) continue;
                 elapsed = 0;
                 try {
-                    httplib::Client cli(config.nrf_uri);
-                    cli.set_connection_timeout(3);
                     nlohmann::json patch = {{"nfStatus", "REGISTERED"}};
-                    auto res = cli.Patch(
-                        "/nnrf-nfm/v1/nf-instances/" + config.nf_instance_id,
-                        patch.dump(), "application/merge-patch+json");
-                    if (!res || (res->status != 200 && res->status != 204)) {
-                        spdlog::warn("NRF heartbeat failed ({}), re-registering",
-                                     res ? res->status : -1);
+                    std::string url = config.nrf_uri + "/nnrf-nfm/v1/nf-instances/" + config.nf_instance_id;
+                    int status = curlHttp2Request("PATCH", url, patch.dump());
+                    if (status != 200 && status != 204) {
+                        spdlog::warn("NRF heartbeat failed ({}), re-registering", status);
                         registerWithNrf(config);
+                    } else {
+                        spdlog::info("NRF heartbeat sent successfully ({} OK)", status);
                     }
                 } catch (const std::exception& e) {
                     spdlog::warn("NRF heartbeat exception: {}", e.what());

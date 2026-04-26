@@ -23,6 +23,16 @@ static std::string generateUUID() {
     return oss.str();
 }
 
+#include <regex>
+
+static bool is_valid_uuid(const std::string& s) {
+    static const std::regex UUID_RE(
+        "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$",
+        std::regex::icase
+    );
+    return std::regex_match(s, UUID_RE);
+}
+
 NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     YAML::Node root;
     try {
@@ -35,7 +45,10 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     NwdafConfig cfg;
 
     cfg.nf_instance_id    = n["nf_instance_id"] ? n["nf_instance_id"].as<std::string>() : "";
-    if (cfg.nf_instance_id.empty()) cfg.nf_instance_id = generateUUID();
+    if (cfg.nf_instance_id.empty()) {
+        cfg.nf_instance_id = root["nf_instance_id"] ? root["nf_instance_id"].as<std::string>() : "";
+    }
+    if (cfg.nf_instance_id.empty() || !is_valid_uuid(cfg.nf_instance_id)) cfg.nf_instance_id = generateUUID();
 
     cfg.plmn_mcc          = n["plmn_mcc"]          ? n["plmn_mcc"].as<std::string>()          : "999";
     cfg.plmn_mnc          = n["plmn_mnc"]          ? n["plmn_mnc"].as<std::string>()          : "70";
