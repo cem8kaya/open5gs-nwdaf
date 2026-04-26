@@ -136,9 +136,23 @@ static std::string resolveReqId(const httplib::Request& req) {
 
 void NwdafServer::handleHealth(const httplib::Request& req, httplib::Response& res) {
     if (!applyRateLimit(rate_limiter_, req, res)) return;
-    json body = {{"status", "UP"}, {"nfType", "NWDAF"},
-                 {"nfInstanceId", config_.nf_instance_id},
-                 {"ts", nowISO()}};
+    json body = {
+        {"status",       "UP"},
+        {"nfType",       "NWDAF"},
+        {"nfInstanceId", config_.nf_instance_id},
+        {"ts",           nowISO()},
+        {"nfProfile", {
+            {"nfType",       "NWDAF"},
+            {"nfInstanceId", config_.nf_instance_id},
+            {"nwdafInfo", {
+                {"analyticsIds", {
+                    "NF_LOAD", "UE_MOBILITY", "UE_COMMUNICATION",
+                    "ABNORMAL_BEHAVIOUR", "QoS_SUSTAINABILITY",
+                    "SERVICE_EXPERIENCE", "NETWORK_PERFORMANCE"
+                }}
+            }}
+        }}
+    };
     res.set_content(body.dump(), "application/json");
     res.status = 200;
 }
