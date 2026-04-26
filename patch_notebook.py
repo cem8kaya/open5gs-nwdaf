@@ -131,7 +131,7 @@ if not has_16:
             "%%bash\n",
             "PROJECT_ID=\"g-ai-lab-491619\"; ZONE=\"europe-west4-a\"; VM_NAME=\"open5gs-ai-lab\"\n",
             "gcloud compute ssh $VM_NAME --project=$PROJECT_ID --zone=$ZONE --command=\"\n",
-            "curl -s --http2-prior-knowledge -X PUT -H 'Content-Type: application/json' -d '{\\\"nfInstanceId\\\": \\\"test-manual\\\", \\\"nfType\\\": \\\"NWDAF\\\", \\\"nfStatus\\\": \\\"REGISTERED\\\"}' 'http://127.0.0.10:7777/nnrf-nfm/v1/nf-instances/test-manual'\n",
+            "curl -s --http2-prior-knowledge -o /dev/null -w \\\"%{http_code}\\\" -X PUT -H 'Content-Type: application/json' -H 'Accept: application/json' -d '{\\\"nfInstanceId\\\": \\\"test-manual\\\", \\\"nfType\\\": \\\"NWDAF\\\", \\\"nfStatus\\\": \\\"REGISTERED\\\", \\\"ipv4Addresses\\\": [\\\"127.0.0.1\\\"]}' 'http://127.0.0.10:7777/nnrf-nfm/v1/nf-instances/test-manual'\n",
             "\"\n"
         ]
     })
@@ -223,6 +223,6 @@ if not has_16:
 
 with open(nb_path, "w") as f:
     json.dump(nb, f, indent=1)
-    f.write("\\n")
+    f.write("\n")
 
 print("Notebook patched successfully!")

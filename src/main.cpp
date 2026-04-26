@@ -123,6 +123,7 @@ static void registerWithNrf(const NwdafConfig& cfg) {
         {"nfInstanceId", cfg.nf_instance_id},
         {"nfType",       "NWDAF"},
         {"nfStatus",     "REGISTERED"},
+        {"ipv4Addresses", {cfg.sbi_bind_address}},
         {"plmnList",     {{{"mcc", cfg.plmn_mcc}, {"mnc", cfg.plmn_mnc}}}},
         {"nfServices",   {{
             {"serviceInstanceId", "nwdaf-analytics-1"},
