@@ -90,8 +90,11 @@ std::vector<std::string> NwdafCollector::readJournalLines(const std::string& uni
     sd_journal_close(j);
     std::reverse(lines.begin(), lines.end());
 #else
+    // --since '1 hour ago' caps the window so event counters (e.g. registrationCount)
+    // reflect recent activity, not lifetime accumulation since boot.
     std::string cmd = "journalctl -u open5gs-" + unit + " -n " +
-                      std::to_string(n) + " --no-pager --output=short-iso 2>/dev/null";
+                      std::to_string(n) + " --since '1 hour ago'"
+                      " --no-pager --output=short-iso 2>/dev/null";
     FILE* fp = popen(cmd.c_str(), "r");
     if (!fp) {
         spdlog::warn("popen failed for journalctl unit {}", unit);
@@ -360,15 +363,26 @@ std::vector<NfMetric> NwdafCollector::collectNfLoad() {
 
 int NwdafCollector::querySubscriberCountFromMongo() {
 #ifdef NWDAF_HAS_MONGODB
-    if (!mongo_client_) return 0;
-    try {
-        auto db = (*mongo_client_)[config_.mongodb_db];
-        auto coll = db["subscribers"];
-        return (int)coll.count_documents({});
-    } catch (...) { return 0; }
-#else
-    return 0;
+    if (mongo_client_) {
+        try {
+            auto db = (*mongo_client_)[config_.mongodb_db];
+            auto coll = db["subscribers"];
+            return (int)coll.count_documents({});
+        } catch (...) {}
+    }
 #endif
+    // Fallback: query via mongosh — works even when libmongocxx is not compiled in.
+    FILE* fp = popen(
+        "mongosh --quiet open5gs --eval 'db.subscribers.countDocuments({})' 2>/dev/null",
+        "r");
+    if (!fp) return 0;
+    char buf[32] = {};
+    int count = 0;
+    if (fgets(buf, sizeof(buf), fp)) {
+        try { count = std::stoi(std::string(buf)); } catch (...) {}
+    }
+    pclose(fp);
+    return count;
 }
 
 int NwdafCollector::getSubscriberCount() {
@@ -545,7 +559,31 @@ double NwdafCollector::getUlEwmaPrediction() const {
 
 // ── ARCH-04: stateful PDU session count ──────────────────────────────────────
 
+// Read the live UPF session count from the Prometheus scrape endpoint.
+// Returns -1 on failure so callers can fall back to the event-tracker.
+static int readUpfSessionCountFromPrometheus() {
+    FILE* fp = popen(
+        "curl -s --connect-timeout 2 http://127.0.0.7:9090/metrics 2>/dev/null"
+        " | grep -v '^#' | grep 'upf_sessionnbr'", "r");
+    if (!fp) return -1;
+    char buf[256] = {};
+    int count = -1;
+    while (fgets(buf, sizeof(buf), fp)) {
+        std::string line(buf);
+        auto pos = line.rfind(' ');
+        if (pos != std::string::npos) {
+            try { count = std::stoi(line.substr(pos + 1)); } catch (...) {}
+        }
+    }
+    pclose(fp);
+    return count;
+}
+
 int NwdafCollector::getActivePduSessionCount() const {
+    // Prefer the live UPF Prometheus metric; the event-tracker misses sessions
+    // that were not cleanly released (e.g. pkill nr-ue without NAS deregistration).
+    int upf_count = readUpfSessionCountFromPrometheus();
+    if (upf_count >= 0) return upf_count;
     std::lock_guard<std::mutex> lk(mutex_);
     return (int)active_sessions_.size();
 }
