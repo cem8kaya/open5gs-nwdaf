@@ -343,14 +343,35 @@ std::vector<NfMetric> NwdafCollector::collectNfLoad() {
         try { m.pid = std::stoi(std::string(pid_buf)); } catch (...) { m.pid = 0; }
 
         if (m.pid > 0 && m.status == "active") {
-            auto [utime, stime] = readProcStat(m.pid);
-            long sc = sysconf(_SC_CLK_TCK);
-            if (sc <= 0) sc = 100;
-            m.cpu_seconds = (double)(utime + stime) / (double)sc;  // cumulative, for nfCpuUsage
-            m.mem_kb = readProcMemKb(m.pid);
-            m.load_pct = computeCpuPct(m.pid);  // BUG-01: instantaneous rate, not cumulative
+            // Two-sample blocking delta: guarantees an accurate instantaneous rate
+            // independent of collection-cycle timing and eliminates the "first-call
+            // warm-up" problem that produced lifetime-average values (e.g. NRF=424%).
+            long hz = sysconf(_SC_CLK_TCK);
+            if (hz <= 0) hz = 100;
+
+            auto [u1, s1] = readProcStat(m.pid);
+            uint64_t ticks1 = static_cast<uint64_t>(u1 + s1);
+            auto t1 = std::chrono::steady_clock::now();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            auto [u2, s2] = readProcStat(m.pid);
+            uint64_t ticks2 = static_cast<uint64_t>(u2 + s2);
+            auto t2 = std::chrono::steady_clock::now();
+
+            double elapsed = std::chrono::duration<double>(t2 - t1).count();
+            double cpu_pct = (elapsed > 0.0)
+                ? static_cast<double>(ticks2 - ticks1) / static_cast<double>(hz)
+                  / elapsed * 100.0
+                : 0.0;
+            cpu_pct = std::max(0.0, cpu_pct);
+
+            // m.cpu_seconds repurposed to carry the instantaneous % for the
+            // nfCpuUsage JSON field (field name kept for API compatibility).
+            m.cpu_seconds = cpu_pct;
+            m.load_pct    = cpu_pct;
+            m.mem_kb      = readProcMemKb(m.pid);
         } else {
-            m.load_pct = 0.0;
+            m.load_pct    = 0.0;
+            m.cpu_seconds = 0.0;
         }
         if      (m.load_pct >= 60) m.load_label = "HIGH";
         else if (m.load_pct >= 20) m.load_label = "MEDIUM";
