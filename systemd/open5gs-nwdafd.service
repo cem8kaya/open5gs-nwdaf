@@ -14,7 +14,6 @@ User=root
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=open5gs-nwdafd
-WatchdogSec=30
 
 [Install]
 WantedBy=multi-user.target

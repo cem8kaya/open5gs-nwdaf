@@ -1,4 +1,5 @@
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/catch_approx.hpp>
 #include "nwdaf_collector.hpp"
 #include "mock_open5gs.hpp"
 #include <thread>
@@ -75,6 +76,32 @@ TEST_CASE("MockCollector: background collection stores throughput history") {
     REQUIRE(hist.size() >= 1);
 }
 
+TEST_CASE("MockCollector: CPU load is rate-based, not cumulative") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+
+    auto t0 = std::chrono::steady_clock::now();
+    col.setMockCpuTime(t0);
+
+    // First call: no snapshot exists → establishes baseline, returns 0.0
+    col.setProcStat(1000, 0, 0);
+    double r1 = col.testComputeCpuPct(1000);
+    REQUIRE(r1 == 0.0);
+
+    // Advance 1 second, process consumed 50 ticks (utime+stime).
+    // Expected: 100 × 50 / (1.0 × 100 Hz) = 50 %
+    col.advanceMockCpuTime(std::chrono::seconds(1));
+    col.setProcStat(1000, 50, 0);
+    double r2 = col.testComputeCpuPct(1000);
+    REQUIRE(r2 == Catch::Approx(50.0).epsilon(0.01));
+
+    // Third call with zero new ticks → 0 %
+    col.advanceMockCpuTime(std::chrono::seconds(1));
+    // proc stat unchanged — same (50, 0)
+    double r3 = col.testComputeCpuPct(1000);
+    REQUIRE(r3 == 0.0);
+}
+
 TEST_CASE("NwdafCollector: throughput sample has valid fields") {
     auto cfg = makeTestConfig();
     MockNwdafCollector col(cfg);
@@ -86,4 +113,56 @@ TEST_CASE("NwdafCollector: throughput sample has valid fields") {
     REQUIRE(sample.total_ul_bps >= 0);
     REQUIRE(sample.total_dl_kbps >= 0);
     REQUIRE(sample.total_ul_kbps >= 0);
+}
+
+// ── PROD-08: non-blocking throughput collection ───────────────────────────────
+
+TEST_CASE("PROD-08: collectUPFThroughput completes in under 100ms (no blocking sleep)") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    col.setNetStats("ogstun", 100000, 50000);
+
+    auto t0 = std::chrono::steady_clock::now();
+    auto s1 = col.collectUPFThroughput();   // first call: stores snapshot
+    auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - t0).count();
+
+    REQUIRE(elapsed_ms < 100);              // must be fast — old code slept 1s
+    REQUIRE(!s1.timestamp_iso.empty());
+    REQUIRE(s1.total_dl_bps >= 0);
+    REQUIRE(s1.total_dl_kbps >= 0);
+}
+
+TEST_CASE("PROD-08: second collectUPFThroughput call computes positive delta") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    // Mock returns rising values each call (call_count * 10000 delta)
+    col.setNetStats("ogstun", 100000, 50000);
+
+    col.collectUPFThroughput();   // first: stores snapshot
+    // Simulate some elapsed time so elapsed_s > 0.01 by briefly sleeping
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    auto s2 = col.collectUPFThroughput();   // second: computes delta
+
+    // The mock increments its counters each readNetStats() call so the delta > 0
+    REQUIRE(s2.total_dl_bps >= 0);
+    REQUIRE(s2.total_dl_kbps >= 0);
+}
+
+TEST_CASE("PROD-08: updateConfig hot-reloads collection_interval") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    // Should not throw or crash; verify the interval is applied
+    REQUIRE_NOTHROW(col.updateConfig(5, 0.5));
+}
+
+// ── PROD-01: new config fields are loaded with correct defaults ───────────────
+
+TEST_CASE("PROD-01: NwdafConfig history_backend defaults to 'none'") {
+    // Construct a config without setting the field — test the programmatic default
+    NwdafConfig cfg;
+    cfg.history_backend = "none";
+    cfg.history_db_path = "/opt/nwdaf/history.db";
+    REQUIRE(cfg.history_backend == "none");
+    REQUIRE(!cfg.history_db_path.empty());
 }

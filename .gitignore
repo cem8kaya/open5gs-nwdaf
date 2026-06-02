@@ -4,3 +4,5 @@ build/
 *.so
 *.log
 /opt/nwdaf/
+__pycache__/
+*.pyc

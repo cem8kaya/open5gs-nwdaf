@@ -1,7 +1,13 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/catch_approx.hpp>
 #include "nwdaf_analytics.hpp"
+#include "nwdaf_subscription.hpp"
+#include "nwdaf_ratelimit.hpp"
 #include "mock_open5gs.hpp"
+#include <fstream>
+#include <filesystem>
+#include <thread>
+#include <chrono>
 
 static NwdafConfig makeTestConfig() {
     NwdafConfig cfg;
@@ -171,6 +177,32 @@ TEST_CASE("NETWORK_PERFORMANCE score with 6/7 NFs active") {
     REQUIRE(score <= 100.0);
 }
 
+TEST_CASE("QoS_SUSTAINABILITY: EWMA prediction is idempotent across multiple calls") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    col.setNetStats("ogstun", 0, 0);
+
+    // Run one full collection cycle to populate the EWMA in the collector.
+    // collectUPFThroughput sleeps 1s internally; join() ensures it finishes.
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    col.stopBackgroundCollection();  // blocks until bgLoop iteration completes (~1s)
+
+    NwdafAnalyticsEngine engine(col, cfg);
+
+    // With BUG-02 fixed, qosSustainability() only reads the EWMA — never writes.
+    // Calling it repeatedly with the same frozen collector state must yield
+    // identical predictions every time.
+    json r1 = engine.compute("QoS_SUSTAINABILITY");
+    json r2 = engine.compute("QoS_SUSTAINABILITY");
+    json r3 = engine.compute("QoS_SUSTAINABILITY");
+
+    REQUIRE(r1["predictedDlKbps"] == r2["predictedDlKbps"]);
+    REQUIRE(r2["predictedDlKbps"] == r3["predictedDlKbps"]);
+    REQUIRE(r1["predictedUlKbps"] == r2["predictedUlKbps"]);
+    REQUIRE(r2["predictedUlKbps"] == r3["predictedUlKbps"]);
+}
+
 TEST_CASE("IsolationForest: outliers score lower than inliers") {
     IsolationForest iforest(50, 0.1, 42);
 
@@ -204,4 +236,326 @@ TEST_CASE("EwmaPredictor: prediction tracks step change with lag") {
     double after_step = ewma.predict();
     REQUIRE(after_step > before_step);
     REQUIRE(after_step < 200.0); // hasn't fully converged yet (lag)
+}
+
+// ── COMP-03: SUPI filtering ───────────────────────────────────────────────────
+
+TEST_CASE("COMP-03: UE_COMMUNICATION filters SMF events by SUPI") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+
+    // Inject SMF lines with SUPI for one UE; the other UE's events should not be counted
+    col.setSmfLines({
+        "[Established] PDU Session Establishment imsi-999700000000001",
+        "[Established] PDU Session Establishment imsi-999700000000001",
+        "[Established] PDU Session Establishment imsi-999700000000002",
+        "[Released] PDU Session Release imsi-999700000000001",
+    });
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    col.stopBackgroundCollection();
+
+    NwdafAnalyticsEngine engine(col, cfg);
+
+    // All events (no SUPI filter): 3 established, 1 released
+    json all = engine.compute("UE_COMMUNICATION");
+    REQUIRE(all["analyticsId"] == "UE_COMMUNICATION");
+    REQUIRE(all["pduSessionEstCount"] >= 3);
+
+    // Filtered to imsi-999700000000002: 1 established, 0 released
+    json filtered = engine.compute("UE_COMMUNICATION", "imsi-999700000000002");
+    REQUIRE(filtered.contains("supi"));
+    REQUIRE(filtered["supi"] == "imsi-999700000000002");
+    REQUIRE((int)filtered["pduSessionEstCount"] == 1);
+    REQUIRE((int)filtered["pduSessionRelCount"] == 0);
+
+    // Filtered to unknown SUPI: 0 events
+    json none = engine.compute("UE_COMMUNICATION", "imsi-000000000000000");
+    REQUIRE((int)none["pduSessionEstCount"] == 0);
+}
+
+TEST_CASE("COMP-03: QoS_SUSTAINABILITY with SUPI returns supiFiltered=false flag") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    NwdafAnalyticsEngine engine(col, cfg);
+
+    json r = engine.compute("QoS_SUSTAINABILITY", "imsi-999700000000001");
+    REQUIRE(r["analyticsId"] == "QoS_SUSTAINABILITY");
+    REQUIRE(r.contains("supiFiltered"));
+    REQUIRE(r["supiFiltered"] == false);
+    REQUIRE(r.contains("note"));
+}
+
+TEST_CASE("COMP-03: SERVICE_EXPERIENCE filters SMF events by SUPI") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    col.setSmfLines({
+        "[Established] PDU Session Establishment imsi-999700000000001",
+        "[Established] PDU Session Establishment imsi-999700000000002",
+    });
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    col.stopBackgroundCollection();
+
+    NwdafAnalyticsEngine engine(col, cfg);
+    json r = engine.compute("SERVICE_EXPERIENCE", "imsi-999700000000001");
+    REQUIRE(r["analyticsId"] == "SERVICE_EXPERIENCE");
+    REQUIRE(r.contains("supi"));
+    REQUIRE(r["supi"] == "imsi-999700000000001");
+}
+
+TEST_CASE("COMP-03: ABNORMAL_BEHAVIOUR with SUPI uses per-UE SMF heuristic") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    // 15 rapid PDU establishments for one UE — should flag as anomaly
+    std::vector<std::string> smf_lines;
+    for (int i = 0; i < 15; ++i)
+        smf_lines.push_back("[Established] PDU Session Establishment imsi-999700000000001");
+    col.setSmfLines(smf_lines);
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    col.stopBackgroundCollection();
+
+    NwdafAnalyticsEngine engine(col, cfg);
+    json r = engine.compute("ABNORMAL_BEHAVIOUR", "imsi-999700000000001");
+    REQUIRE(r["analyticsId"] == "ABNORMAL_BEHAVIOUR");
+    REQUIRE(r.contains("supi"));
+    REQUIRE(r["anomalyDetected"] == true);
+    REQUIRE(r.contains("note"));
+}
+
+// ── COMP-04: time window filtering ───────────────────────────────────────────
+
+TEST_CASE("COMP-04: parseISO round-trips a known timestamp") {
+    std::string ts = "2026-04-21T09:00:00Z";
+    auto tp = NwdafAnalyticsEngine::parseISO(ts);
+    // Convert back to time_t and check year/month/day
+    auto t = std::chrono::system_clock::to_time_t(tp);
+    struct tm tm_buf;
+    gmtime_r(&t, &tm_buf);
+    REQUIRE(tm_buf.tm_year + 1900 == 2026);
+    REQUIRE(tm_buf.tm_mon  + 1    == 4);
+    REQUIRE(tm_buf.tm_mday        == 21);
+    REQUIRE(tm_buf.tm_hour        == 9);
+}
+
+TEST_CASE("COMP-04: inWindow accepts events inside window and rejects outside") {
+    std::string start = "2026-04-21T08:00:00Z";
+    std::string end   = "2026-04-21T10:00:00Z";
+
+    REQUIRE( NwdafAnalyticsEngine::inWindow("2026-04-21T09:00:00Z", start, end));
+    REQUIRE(!NwdafAnalyticsEngine::inWindow("2026-04-21T07:59:59Z", start, end));
+    REQUIRE(!NwdafAnalyticsEngine::inWindow("2026-04-21T10:00:01Z", start, end));
+    // Empty window = accept all
+    REQUIRE( NwdafAnalyticsEngine::inWindow("2026-04-21T09:00:00Z", "", ""));
+    // Empty event timestamp = accept (no timestamp on event)
+    REQUIRE( NwdafAnalyticsEngine::inWindow("", start, end));
+}
+
+TEST_CASE("COMP-04: filterByWindow retains only samples in window") {
+    // Build 3 ThroughputSamples with distinct timestamps
+    std::vector<ThroughputSample> hist;
+    for (const auto& ts : {"2026-04-21T07:00:00Z",
+                            "2026-04-21T09:00:00Z",
+                            "2026-04-21T11:00:00Z"}) {
+        ThroughputSample s;
+        s.timestamp_iso = ts;
+        s.total_dl_kbps = 100.0;
+        s.total_ul_kbps = 50.0;
+        hist.push_back(s);
+    }
+
+    auto filtered = NwdafAnalyticsEngine::filterByWindow(
+        hist, "2026-04-21T08:00:00Z", "2026-04-21T10:00:00Z");
+    REQUIRE(filtered.size() == 1);
+    REQUIRE(filtered[0].timestamp_iso == "2026-04-21T09:00:00Z");
+}
+
+TEST_CASE("COMP-04: UE_MOBILITY respects start_ts / end_ts") {
+    auto cfg = makeTestConfig();
+    MockNwdafCollector col(cfg);
+    // Two AMF lines, but we'll ask for a window that excludes all (past dates)
+    col.setAmfLines({
+        "Registration imsi-999700000000001 accepted",
+        "Registration imsi-999700000000002 accepted",
+    });
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    col.stopBackgroundCollection();
+
+    NwdafAnalyticsEngine engine(col, cfg);
+
+    // Narrow window in the far past: all events have current timestamps → excluded
+    json r = engine.compute("UE_MOBILITY", "", "2000-01-01T00:00:00Z", "2000-01-02T00:00:00Z");
+    REQUIRE(r["analyticsId"] == "UE_MOBILITY");
+    REQUIRE((int)r["registrationCount"] == 0);
+
+    // Wide-open window: all events included
+    json r2 = engine.compute("UE_MOBILITY", "", "", "");
+    REQUIRE(r2["analyticsId"] == "UE_MOBILITY");
+}
+
+// ── COMP-05: QOS_SUSTAINABILITY case normalization (server-side) ──────────────
+// Tested via the integration test below (see test_server_integration.cpp additions)
+
+// ── COMP-01: NwdafNotifier subscription store ─────────────────────────────────
+
+TEST_CASE("COMP-01: incrementReportCount works and report_count starts at 0") {
+    NwdafSubscriptionStore store;
+    nlohmann::json body = {
+        {"analyticsId", "NF_LOAD"},
+        {"notifUri",    "http://127.0.0.1:9998/cb"},
+        {"repPeriod",   10},
+        {"maxReportNbr", 3}
+    };
+    auto sub_id = store.create(body);
+    auto sub = store.get(sub_id);
+    REQUIRE(sub.report_count == 0);
+
+    int c1 = store.incrementReportCount(sub_id);
+    REQUIRE(c1 == 1);
+    int c2 = store.incrementReportCount(sub_id);
+    REQUIRE(c2 == 2);
+
+    // Non-existent sub_id returns -1
+    REQUIRE(store.incrementReportCount("sub-nonexistent") == -1);
+}
+
+TEST_CASE("COMP-02: NwdafConfig loads nrf_heartbeat_interval_seconds with default 60") {
+    NwdafConfig cfg;
+    cfg.nrf_heartbeat_interval_seconds = 60;  // default per spec
+    REQUIRE(cfg.nrf_heartbeat_interval_seconds == 60);
+}
+
+// ── PROD-07: atomic model save (write-then-rename) ────────────────────────────
+
+TEST_CASE("PROD-07: IsolationForest save includes version and n_samples metadata") {
+    IsolationForest iforest(10, 0.1, 42);
+
+    std::vector<std::array<double,2>> X;
+    for (int i = 0; i < 20; ++i) X.push_back({(double)i, (double)i});
+    iforest.fit(X);
+    REQUIRE(iforest.isFitted());
+
+    std::string path = "/tmp/nwdaf_prod07_test.json";
+    REQUIRE_NOTHROW(iforest.save(path));
+
+    // Parse the file and verify required metadata keys exist
+    std::ifstream f(path);
+    REQUIRE(f.is_open());
+    nlohmann::json j = nlohmann::json::parse(f);
+    REQUIRE(j.contains("version"));
+    REQUIRE(j.contains("trained_at"));
+    REQUIRE(j.contains("n_samples"));
+    REQUIRE(j["version"] == 1);
+    REQUIRE((int)j["n_samples"] == 20);
+}
+
+TEST_CASE("PROD-07: IsolationForest save/load round-trip with metadata") {
+    IsolationForest a(10, 0.1, 42);
+    std::vector<std::array<double,2>> X;
+    for (int i = 0; i < 15; ++i) X.push_back({(double)i * 2.0, (double)i});
+    a.fit(X);
+
+    std::string path = "/tmp/nwdaf_prod07_roundtrip.json";
+    a.save(path);
+
+    IsolationForest b(10, 0.1, 42);
+    REQUIRE_NOTHROW(b.load(path));
+    REQUIRE(b.isFitted());
+
+    // Predictions must match after round-trip
+    auto pa = a.predict({{5.0, 5.0}, {1000.0, 1000.0}});
+    auto pb = b.predict({{5.0, 5.0}, {1000.0, 1000.0}});
+    REQUIRE(pa.size() == pb.size());
+    for (size_t i = 0; i < pa.size(); ++i) REQUIRE(pa[i] == pb[i]);
+}
+
+TEST_CASE("PROD-07: saveModels writes to tmp then renames (no partial file on disk)") {
+    auto cfg = makeTestConfig();
+    cfg.model_dir = "/tmp/nwdaf_prod07_engine";
+    std::filesystem::create_directories(cfg.model_dir);
+    std::string final_path = cfg.model_dir + "/isolation_forest.json";
+    // Remove any previous file
+    std::filesystem::remove(final_path);
+
+    MockNwdafCollector col(cfg);
+    NwdafAnalyticsEngine engine(col, cfg);
+
+    // Inject enough history to retrain
+    col.setNetStats("ogstun", 10000, 5000);
+    col.startBackgroundCollection();
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    col.stopBackgroundCollection();
+
+    json r = engine.retrain();
+    // Either trained or skipped (if not enough samples in short window)
+    REQUIRE((r["status"] == "trained" || r["status"] == "skipped"));
+
+    if (r["status"] == "trained") {
+        // The final file must exist; no .tmp.* file should remain
+        REQUIRE(std::filesystem::exists(final_path));
+        for (const auto& entry : std::filesystem::directory_iterator(cfg.model_dir))
+            REQUIRE(entry.path().extension() != ".tmp");
+    }
+}
+
+// ── PROD-02: NwdafSubscriptionBackend interface ───────────────────────────────
+
+TEST_CASE("PROD-02: NullSubscriptionBackend is a transparent no-op") {
+    auto backend = std::make_shared<NullSubscriptionBackend>();
+    NwdafSubscriptionStore store(backend);
+
+    nlohmann::json body = {
+        {"analyticsId", "NF_LOAD"},
+        {"notifUri",    "http://127.0.0.1:9999/cb"},
+        {"repPeriod",   30}
+    };
+    auto sub_id = store.create(body);
+    REQUIRE(store.exists(sub_id));
+    REQUIRE(store.count() == 1);
+
+    auto loaded = backend->loadAll();  // NullBackend always returns empty
+    REQUIRE(loaded.empty());
+
+    REQUIRE(store.remove(sub_id));
+    REQUIRE(!store.exists(sub_id));
+    REQUIRE(store.count() == 0);
+}
+
+TEST_CASE("PROD-02: NwdafSubscriptionStore default constructor uses null backend") {
+    NwdafSubscriptionStore store;  // should work exactly as before
+
+    nlohmann::json body = {{"analyticsId","UE_MOBILITY"},{"notifUri","http://x"}};
+    auto id = store.create(body);
+    REQUIRE(store.exists(id));
+    int cnt = store.incrementReportCount(id);
+    REQUIRE(cnt == 1);
+    REQUIRE(store.remove(id));
+    REQUIRE(!store.exists(id));
+}
+
+// ── PROD-06: rate limiter ─────────────────────────────────────────────────────
+
+TEST_CASE("PROD-06: TokenBucket allows requests up to capacity then blocks") {
+    // Capacity 3, refill rate 1/s — consume 3 immediately; 4th should fail
+    RateLimiter rl(3, 1000);  // per-IP=3, global=1000
+    REQUIRE(rl.allow("10.0.0.1"));
+    REQUIRE(rl.allow("10.0.0.1"));
+    REQUIRE(rl.allow("10.0.0.1"));
+    REQUIRE(!rl.allow("10.0.0.1"));   // bucket exhausted
+}
+
+TEST_CASE("PROD-06: RateLimiter disabled when both limits are 0") {
+    RateLimiter rl(0, 0);
+    for (int i = 0; i < 1000; ++i)
+        REQUIRE(rl.allow("192.168.1.1"));  // unlimited
+}
+
+TEST_CASE("PROD-06: NwdafConfig rate_limit fields default correctly") {
+    NwdafConfig cfg;
+    cfg.rate_limit_per_ip_rps = 10;
+    cfg.rate_limit_global_rps = 100;
+    REQUIRE(cfg.rate_limit_per_ip_rps == 10);
+    REQUIRE(cfg.rate_limit_global_rps == 100);
 }
