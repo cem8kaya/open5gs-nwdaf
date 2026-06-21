@@ -46,6 +46,7 @@ nwdaf:
   # ML
   model_dir: "/opt/nwdaf/models"
   anomaly_contamination: 0.10       # Expected fraction of anomalies
+  anomaly_seed: 0                   # Seed for Isolation Forest reproducibility (0 = random)
   anomaly_min_samples: 120          # ~20 min at 10s interval — matches retrain() quality gate
   baseline_stddev_min_kbps: 0.5     # Below this, return BASELINE_TOO_LOW
   ewma_alpha: 0.3                   # EWMA smoothing factor (0=no adaptation, 1=instant)
