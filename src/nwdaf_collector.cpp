@@ -15,6 +15,10 @@
 #include <sqlite3.h>
 #endif
 
+#ifdef NWDAF_HAS_MONGODB
+#include <mongocxx/instance.hpp>
+#endif
+
 #ifdef NWDAF_USE_SD_JOURNAL
 #include <systemd/sd-journal.h>
 #endif
@@ -348,7 +352,9 @@ std::vector<NfMetric> NwdafCollector::collectNfLoad() {
         FILE* fp = popen(check_cmd.c_str(), "r");
         char buf[64] = {};
         if (fp) {
-            fgets(buf, sizeof(buf), fp);
+            if (fgets(buf, sizeof(buf), fp) == nullptr) {
+                // Ignore
+            }
             pclose(fp);
         }
         std::string status_str(buf);
@@ -364,7 +370,10 @@ std::vector<NfMetric> NwdafCollector::collectNfLoad() {
                               " --property=MainPID --value 2>/dev/null";
         FILE* fp2 = popen(pid_cmd.c_str(), "r");
         char pid_buf[32] = {};
-        if (fp2) { fgets(pid_buf, sizeof(pid_buf), fp2); pclose(fp2); }
+        if (fp2) { 
+            if (fgets(pid_buf, sizeof(pid_buf), fp2) == nullptr) {}
+            pclose(fp2); 
+        }
         try { m.pid = std::stoi(std::string(pid_buf)); } catch (...) { m.pid = 0; }
 
         if (m.pid > 0 && m.status == "active") {
