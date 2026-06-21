@@ -40,6 +40,9 @@ public:
     // BUG-04: explicit retrain — always fits, regardless of isFitted() state
     json retrain();
 
+    // P2-5: Readiness check
+    bool isReady() const;
+
     // PROD-03: expose collector data for Prometheus metrics endpoint
     std::pair<double,double>   getCurrentThroughput() const;   // {dl_kbps, ul_kbps}
     std::vector<NfMetric>      getCurrentNfMetrics()  const;

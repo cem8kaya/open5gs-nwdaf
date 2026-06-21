@@ -66,7 +66,7 @@ static ServerFixture& getFixture() {
 }
 
 TEST_CASE("Integration: GET /health returns 200 UP") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     cli.set_connection_timeout(3);
     auto res = cli.Get("/nwdaf-analytics/v1/health");
@@ -77,7 +77,7 @@ TEST_CASE("Integration: GET /health returns 200 UP") {
 }
 
 TEST_CASE("Integration: GET /analytics?analyticsId=NF_LOAD returns 200") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
     REQUIRE(res);
@@ -87,7 +87,7 @@ TEST_CASE("Integration: GET /analytics?analyticsId=NF_LOAD returns 200") {
 }
 
 TEST_CASE("Integration: GET /analytics without param returns 400") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics");
     REQUIRE(res);
@@ -95,7 +95,7 @@ TEST_CASE("Integration: GET /analytics without param returns 400") {
 }
 
 TEST_CASE("Integration: GET /analytics?analyticsId=INVALID returns 422") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=INVALID_ID");
     REQUIRE(res);
@@ -103,7 +103,7 @@ TEST_CASE("Integration: GET /analytics?analyticsId=INVALID returns 422") {
 }
 
 TEST_CASE("Integration: POST /subscriptions creates subscription with subId") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     json body = {{"analyticsId","NF_LOAD"},{"notifUri","http://127.0.0.1:9999/callback"},
                  {"repPeriod", 30}};
@@ -115,7 +115,7 @@ TEST_CASE("Integration: POST /subscriptions creates subscription with subId") {
 }
 
 TEST_CASE("Integration: GET /subscriptions/<subId> returns 200") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
 
     // Create first
@@ -132,7 +132,7 @@ TEST_CASE("Integration: GET /subscriptions/<subId> returns 200") {
 }
 
 TEST_CASE("Integration: DELETE /subscriptions/<subId> returns 204") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
 
     json body = {{"analyticsId","NF_LOAD"},{"notifUri","http://127.0.0.1:9999/del"}};
@@ -145,7 +145,7 @@ TEST_CASE("Integration: DELETE /subscriptions/<subId> returns 204") {
 }
 
 TEST_CASE("Integration: GET /subscriptions/<subId> after delete returns 404") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
 
     json body = {{"analyticsId","NF_LOAD"},{"notifUri","http://127.0.0.1:9999/404"}};
@@ -159,7 +159,7 @@ TEST_CASE("Integration: GET /subscriptions/<subId> after delete returns 404") {
 }
 
 TEST_CASE("Integration: All 7 analytics IDs return 200 with correct analyticsId") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
 
     std::vector<std::string> ids = {
@@ -177,7 +177,7 @@ TEST_CASE("Integration: All 7 analytics IDs return 200 with correct analyticsId"
 }
 
 TEST_CASE("Integration: POST /train returns 200") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Post("/nwdaf-analytics/v1/train", "", "application/json");
     REQUIRE(res);
@@ -187,7 +187,7 @@ TEST_CASE("Integration: POST /train returns 200") {
 // ── COMP-05: QOS_SUSTAINABILITY case normalization ────────────────────────────
 
 TEST_CASE("Integration: COMP-05 QOS_SUSTAINABILITY (uppercase) normalized to 200") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     // Canonical casing
     auto res1 = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=QoS_SUSTAINABILITY");
@@ -208,7 +208,7 @@ TEST_CASE("Integration: COMP-05 QOS_SUSTAINABILITY (uppercase) normalized to 200
 // ── COMP-03: NF_LOAD rejects supi parameter ──────────────────────────────────
 
 TEST_CASE("Integration: COMP-03 NF_LOAD with supi returns 400") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD&supi=imsi-999700000000001");
     REQUIRE(res);
@@ -220,7 +220,7 @@ TEST_CASE("Integration: COMP-03 NF_LOAD with supi returns 400") {
 // ── COMP-03: UE_COMMUNICATION returns supi field when filtered ─────────────────
 
 TEST_CASE("Integration: COMP-03 UE_COMMUNICATION with supi includes supi in response") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics"
                        "?analyticsId=UE_COMMUNICATION&supi=imsi-999700000000001");
@@ -234,7 +234,7 @@ TEST_CASE("Integration: COMP-03 UE_COMMUNICATION with supi includes supi in resp
 // ── COMP-03: QoS_SUSTAINABILITY with supi returns supiFiltered flag ───────────
 
 TEST_CASE("Integration: COMP-03 QoS_SUSTAINABILITY with supi returns supiFiltered=false") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics"
                        "?analyticsId=QoS_SUSTAINABILITY&supi=imsi-999700000000001");
@@ -248,7 +248,7 @@ TEST_CASE("Integration: COMP-03 QoS_SUSTAINABILITY with supi returns supiFiltere
 // ── PROD-03: Prometheus metrics endpoint ─────────────────────────────────────
 
 TEST_CASE("Integration: PROD-03 GET /metrics returns 200 with Prometheus text format") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/metrics");
     REQUIRE(res);
@@ -259,7 +259,7 @@ TEST_CASE("Integration: PROD-03 GET /metrics returns 200 with Prometheus text fo
 }
 
 TEST_CASE("Integration: PROD-03 /metrics contains required gauge names") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/metrics");
     REQUIRE(res);
@@ -274,7 +274,7 @@ TEST_CASE("Integration: PROD-03 /metrics contains required gauge names") {
 }
 
 TEST_CASE("Integration: PROD-03 /metrics request counter increments after analytics call") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
 
     // Make two NF_LOAD requests
@@ -290,7 +290,7 @@ TEST_CASE("Integration: PROD-03 /metrics request counter increments after analyt
 // ── PROD-05: per-request correlation IDs ─────────────────────────────────────
 
 TEST_CASE("Integration: PROD-05 response includes X-Request-Id header") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");
     REQUIRE(res);
@@ -301,7 +301,7 @@ TEST_CASE("Integration: PROD-05 response includes X-Request-Id header") {
 }
 
 TEST_CASE("Integration: PROD-05 client-supplied X-Request-Id is echoed verbatim") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     httplib::Headers headers = {{"X-Request-Id", "test-correlation-abc123"}};
     auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=UE_MOBILITY", headers);
@@ -310,7 +310,7 @@ TEST_CASE("Integration: PROD-05 client-supplied X-Request-Id is echoed verbatim"
 }
 
 TEST_CASE("Integration: PROD-05 /health also returns X-Request-Id when sent") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     // Health endpoint does not set X-Request-Id (rate-limited but no correlation logging)
     // The important thing is it still returns 200
@@ -322,7 +322,7 @@ TEST_CASE("Integration: PROD-05 /health also returns X-Request-Id when sent") {
 // ── PROD-06: rate limiter — normal traffic is allowed ────────────────────────
 
 TEST_CASE("Integration: PROD-06 single request is not rate-limited (default 10 RPS)") {
-    auto& fx = getFixture();
+    (void)getFixture();
     httplib::Client cli("127.0.0.1", TEST_PORT);
     // A single GET should never hit the rate limit
     auto res = cli.Get("/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD");

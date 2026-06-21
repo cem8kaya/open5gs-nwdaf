@@ -13,6 +13,8 @@
 #include <string>
 #include <iostream>
 #include <thread>
+#include <algorithm>
+#include <cmath>
 
 #ifdef NWDAF_ENABLE_PUSH_DELIVERY
 #include "nwdaf_notifier.hpp"
@@ -23,6 +25,7 @@
 #endif
 
 static std::atomic<bool>   g_shutdown{false};
+static std::atomic<int>    g_heartbeat_interval{60};
 static NwdafServer*        g_server_ptr    = nullptr;
 static NwdafCollector*     g_collector_ptr = nullptr;
 static NwdafAnalyticsEngine* g_engine_ptr  = nullptr;
@@ -90,34 +93,21 @@ static void setupLogging(const NwdafConfig& cfg) {
     spdlog::set_default_logger(logger);
 }
 
-static int curlHttp2Request(const std::string& method, const std::string& url, const std::string& body) {
-    std::string escaped_body = body;
-    // Basic single quote escape for bash: replace ' with '\''
-    size_t pos = 0;
-    while ((pos = escaped_body.find('\'', pos)) != std::string::npos) {
-        escaped_body.replace(pos, 1, "'\\''");
-        pos += 4;
+static std::unique_ptr<httplib::Client> createHttpClient(const std::string& uri) {
+#ifdef NWDAF_USE_TLS
+    if (uri.find("https://") == 0) {
+        auto cli = std::make_unique<httplib::Client>(uri);
+        cli->enable_server_certificate_verification(false);
+        cli->set_connection_timeout(3, 0);
+        return cli;
     }
-
-    std::string cmd = "curl -s -o /dev/null -w \"%{http_code}\" --http2-prior-knowledge --connect-timeout 3 -X " 
-                    + method + " -H \"Content-Type: application/json\" "
-                    + "-H \"Accept: application/json\" "
-                    + "-d '" + escaped_body + "' \"" + url + "\"";
-    FILE* fp = popen(cmd.c_str(), "r");
-    if (!fp) return -1;
-    char buf[16];
-    if (fgets(buf, sizeof(buf), fp) != nullptr) {
-        try {
-            int status = std::stoi(buf);
-            pclose(fp);
-            return status;
-        } catch (...) {}
-    }
-    pclose(fp);
-    return -1;
+#endif
+    auto cli = std::make_unique<httplib::Client>(uri);
+    cli->set_connection_timeout(3, 0);
+    return cli;
 }
 
-static void registerWithNrf(const NwdafConfig& cfg) {
+static bool registerWithNrf(const NwdafConfig& cfg) {
     using json = nlohmann::json;
     json body = {
         {"nfInstanceId", cfg.nf_instance_id},
@@ -135,13 +125,26 @@ static void registerWithNrf(const NwdafConfig& cfg) {
             {"ipEndPoints",       {{{"ipv4Address", cfg.sbi_bind_address}, {"port", cfg.sbi_port}}}}
         }}}
     };
-    std::string url = cfg.nrf_uri + "/nnrf-nfm/v1/nf-instances/" + cfg.nf_instance_id;
-    int status = curlHttp2Request("PUT", url, body.dump());
     
-    if (status == 201 || status == 200)
-        spdlog::info("NRF registration successful ({} {})", status, status == 201 ? "Created" : "OK");
-    else
+    auto cli = createHttpClient(cfg.nrf_uri);
+    std::string path = "/nnrf-nfm/v1/nf-instances/" + cfg.nf_instance_id;
+    
+    auto res = cli->Put(path.c_str(), body.dump(), "application/json");
+    if (res && (res->status == 201 || res->status == 200)) {
+        spdlog::info("NRF registration successful ({} {})", res->status, res->status == 201 ? "Created" : "OK");
+        try {
+            auto res_json = json::parse(res->body);
+            if (res_json.contains("heartBeatTimer")) {
+                g_heartbeat_interval = res_json["heartBeatTimer"].get<int>();
+                spdlog::info("Updated heartbeat interval to {}s from NRF", g_heartbeat_interval.load());
+            }
+        } catch (...) {}
+        return true;
+    } else {
+        int status = res ? res->status : -1;
         spdlog::warn("NRF registration failed (status {})", status);
+        return false;
+    }
 }
 
 int main(int argc, char* argv[]) {
@@ -202,21 +205,44 @@ int main(int argc, char* argv[]) {
     // COMP-02: NRF heartbeat thread (TS 29.510 §5.3.2.4)
     std::thread nrf_hb_thread;
     if (config.nrf_register_on_startup && config.nrf_heartbeat_interval_seconds > 0) {
+        g_heartbeat_interval = config.nrf_heartbeat_interval_seconds;
         nrf_hb_thread = std::thread([&config]() {
             int elapsed = 0;
+            int miss_count = 0;
+            auto cli = createHttpClient(config.nrf_uri);
+            std::string path = "/nnrf-nfm/v1/nf-instances/" + config.nf_instance_id;
+            
             while (!g_shutdown) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
                 if (g_shutdown) break;
-                if (++elapsed < config.nrf_heartbeat_interval_seconds) continue;
+                if (++elapsed < g_heartbeat_interval.load()) continue;
                 elapsed = 0;
                 try {
-                    nlohmann::json patch = {{"nfStatus", "REGISTERED"}};
-                    std::string url = config.nrf_uri + "/nnrf-nfm/v1/nf-instances/" + config.nf_instance_id;
-                    int status = curlHttp2Request("PATCH", url, patch.dump());
+                    nlohmann::json patch = nlohmann::json::array();
+                    patch.push_back({{"op", "replace"}, {"path", "/nfStatus"}, {"value", "REGISTERED"}});
+                    
+                    auto res = cli->Patch(path.c_str(), patch.dump(), "application/json-patch+json");
+                    int status = res ? res->status : -1;
+                    
                     if (status != 200 && status != 204) {
-                        spdlog::warn("NRF heartbeat failed ({}), re-registering", status);
-                        registerWithNrf(config);
+                        miss_count++;
+                        spdlog::warn("NRF heartbeat failed ({}), miss count: {}", status, miss_count);
+                        if (miss_count >= 3) {
+                            spdlog::warn("NRF heartbeat missed {} times, re-registering", miss_count);
+                            if (registerWithNrf(config)) {
+                                miss_count = 0;
+                            } else {
+                                // backoff next heartbeat attempt
+                                int backoff = std::min(30, 2 << miss_count);
+                                elapsed = g_heartbeat_interval.load() - backoff;
+                            }
+                        } else {
+                            // Capped exponential backoff for next heartbeat retry (up to 8 seconds)
+                            int backoff = std::min(8, 2 << miss_count);
+                            elapsed = g_heartbeat_interval.load() - backoff;
+                        }
                     } else {
+                        miss_count = 0;
                         spdlog::info("NRF heartbeat sent successfully ({} OK)", status);
                     }
                 } catch (const std::exception& e) {

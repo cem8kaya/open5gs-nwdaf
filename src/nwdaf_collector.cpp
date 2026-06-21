@@ -195,7 +195,13 @@ std::vector<AmfEvent> NwdafCollector::collectAmfEvents() {
     if (service_it == config_.nf_service_names.end()) return events;
 
     auto lines = readJournalLines(service_it->second, config_.amf_journal_lines);
-    std::regex supi_re(config_.supi_regex);
+    std::regex supi_re;
+    try {
+        supi_re.assign(config_.supi_regex, std::regex_constants::optimize);
+    } catch (const std::regex_error& e) {
+        spdlog::error("AMF regex compilation failed: {}", e.what());
+        return events;
+    }
 
     for (const auto& line : lines) {
         AmfEvent ev;
@@ -221,8 +227,15 @@ std::vector<AmfEvent> NwdafCollector::collectAmfEvents() {
             continue;
 
         std::smatch m;
-        if (std::regex_search(line, m, supi_re))
-            ev.supi = "imsi-" + m[1].str();
+        try {
+            if (std::regex_search(line, m, supi_re)) {
+                if (m.size() > 1) {
+                    ev.supi = "imsi-" + m[1].str();
+                }
+            }
+        } catch (const std::regex_error& e) {
+            spdlog::warn("AMF regex search failed (possible ReDoS): {}", e.what());
+        }
 
         events.push_back(std::move(ev));
     }
@@ -235,7 +248,13 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
     if (service_it == config_.nf_service_names.end()) return events;
 
     auto lines = readJournalLines(service_it->second, config_.smf_journal_lines);
-    std::regex supi_re(config_.supi_regex);
+    std::regex supi_re;
+    try {
+        supi_re.assign(config_.supi_regex, std::regex_constants::optimize);
+    } catch (const std::regex_error& e) {
+        spdlog::error("SMF regex compilation failed: {}", e.what());
+        return events;
+    }
 
     for (const auto& line : lines) {
         SmfEvent ev;
@@ -258,9 +277,15 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
             continue;
 
         std::smatch m;
-        if (std::regex_search(line, m, supi_re)) {
-            ev.supi       = "imsi-" + m[1].str();
-            ev.session_id = ev.supi;   // ARCH-04: use SUPI as session key
+        try {
+            if (std::regex_search(line, m, supi_re)) {
+                if (m.size() > 1) {
+                    ev.supi       = "imsi-" + m[1].str();
+                    ev.session_id = ev.supi;   // ARCH-04: use SUPI as session key
+                }
+            }
+        } catch (const std::regex_error& e) {
+            spdlog::warn("SMF regex search failed (possible ReDoS): {}", e.what());
         }
 
         events.push_back(std::move(ev));

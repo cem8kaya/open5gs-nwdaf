@@ -6,22 +6,6 @@
 #include <iomanip>
 #include <cmath>
 
-static std::string generateUUID() {
-    std::random_device rd;
-    std::mt19937_64 gen(rd());
-    std::uniform_int_distribution<uint64_t> dis;
-    uint64_t a = dis(gen), b = dis(gen);
-    a = (a & 0xFFFFFFFFFFFF0FFFULL) | 0x0000000000004000ULL;
-    b = (b & 0x3FFFFFFFFFFFFFFFULL) | 0x8000000000000000ULL;
-    std::ostringstream oss;
-    oss << std::hex << std::setfill('0')
-        << std::setw(8) << (a >> 32) << '-'
-        << std::setw(4) << ((a >> 16) & 0xFFFF) << '-'
-        << std::setw(4) << (a & 0xFFFF) << '-'
-        << std::setw(4) << (b >> 48) << '-'
-        << std::setw(12) << (b & 0xFFFFFFFFFFFFULL);
-    return oss.str();
-}
 
 #include <regex>
 
@@ -48,7 +32,9 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     if (cfg.nf_instance_id.empty()) {
         cfg.nf_instance_id = root["nf_instance_id"] ? root["nf_instance_id"].as<std::string>() : "";
     }
-    if (cfg.nf_instance_id.empty() || !is_valid_uuid(cfg.nf_instance_id)) cfg.nf_instance_id = generateUUID();
+    if (cfg.nf_instance_id.empty() || !is_valid_uuid(cfg.nf_instance_id)) {
+        throw std::runtime_error("Invalid or missing nf_instance_id in config file. A valid UUID is required.");
+    }
 
     cfg.plmn_mcc          = n["plmn_mcc"]          ? n["plmn_mcc"].as<std::string>()          : "999";
     cfg.plmn_mnc          = n["plmn_mnc"]          ? n["plmn_mnc"].as<std::string>()          : "70";
@@ -86,6 +72,7 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
 
     cfg.model_dir                = n["model_dir"]                ? n["model_dir"].as<std::string>()       : "/opt/nwdaf/models";
     cfg.anomaly_contamination    = n["anomaly_contamination"]    ? n["anomaly_contamination"].as<double>() : 0.10;
+    cfg.anomaly_seed             = n["anomaly_seed"]             ? n["anomaly_seed"].as<unsigned int>()     : 0;
     cfg.anomaly_min_samples      = n["anomaly_min_samples"]      ? n["anomaly_min_samples"].as<int>()      : 10;
     cfg.baseline_stddev_min_kbps = n["baseline_stddev_min_kbps"] ? n["baseline_stddev_min_kbps"].as<double>() : 0.5;
     cfg.ewma_alpha               = n["ewma_alpha"]               ? n["ewma_alpha"].as<double>()             : 0.3;
@@ -119,6 +106,9 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     cfg.tls_cert_file = n["tls_cert_file"] ? n["tls_cert_file"].as<std::string>() : "/etc/open5gs/tls/nwdaf.pem";
     cfg.tls_key_file  = n["tls_key_file"]  ? n["tls_key_file"].as<std::string>()  : "/etc/open5gs/tls/nwdaf.key";
     cfg.tls_ca_file   = n["tls_ca_file"]   ? n["tls_ca_file"].as<std::string>()   : "/etc/open5gs/tls/ca.pem";
+
+    // P1-4: OAuth 2.0
+    cfg.oauth_enabled = n["oauth_enabled"] ? n["oauth_enabled"].as<bool>()        : false;
 
     return cfg;
 }

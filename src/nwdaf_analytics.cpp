@@ -18,7 +18,8 @@ NwdafAnalyticsEngine::NwdafAnalyticsEngine(NwdafCollector& collector,
                                            const NwdafConfig& config)
     : collector_(collector),
       config_(config),
-      anomaly_model_(100, config.anomaly_contamination, 42)
+      anomaly_model_(100, config.anomaly_contamination, 
+                     config.anomaly_seed ? config.anomaly_seed : std::random_device{}())
     // BUG-02: dl_ewma_ / ul_ewma_ moved to NwdafCollector — updated in bgLoop only
 {
     loadModels();
@@ -167,20 +168,25 @@ void NwdafAnalyticsEngine::updateConfig(double anomaly_contamination) {
     config_.anomaly_contamination = anomaly_contamination;
 }
 
+bool NwdafAnalyticsEngine::isReady() const {
+    std::shared_lock<std::shared_mutex> lock(ml_mutex_);
+    return anomaly_model_.isFitted();
+}
+
 // BUG-04: explicit retrain — always calls fit(), regardless of isFitted() state
 json NwdafAnalyticsEngine::retrain() {
     auto hist = collector_.getThroughputHistory(360);
     int data_points = (int)hist.size();
 
     // Quality gate: require minimum sample count (~20 min at 10s interval)
-    constexpr int MIN_SAMPLES = 120;
-    constexpr double MIN_VARIANCE_KBPS = 0.5;
+    int min_samples = config_.anomaly_min_samples;
+    double min_variance_kbps = config_.baseline_stddev_min_kbps;
 
-    if (data_points < MIN_SAMPLES) {
+    if (data_points < min_samples) {
         return {
             {"status",     "INSUFFICIENT_DATA"},
             {"dataPoints", data_points},
-            {"required",   MIN_SAMPLES},
+            {"required",   min_samples},
             {"message",    "Collect more traffic data before training"}
         };
     }
@@ -199,12 +205,13 @@ json NwdafAnalyticsEngine::retrain() {
     };
     double dl_std = stddev(dl_vals);
     double ul_std = stddev(ul_vals);
-    if (dl_std < MIN_VARIANCE_KBPS && ul_std < MIN_VARIANCE_KBPS) {
+    if (dl_std < min_variance_kbps && ul_std < min_variance_kbps) {
         return {
             {"status",  "BASELINE_TOO_LOW"},
-            {"dlStd",   dl_std},
-            {"ulStd",   ul_std},
-            {"message", "No traffic variation — run UE traffic scenarios first"}
+            {"message", "Insufficient traffic variance to train anomaly model"},
+            {"dl_std",  dl_std},
+            {"ul_std",  ul_std},
+            {"required", min_variance_kbps}
         };
     }
 

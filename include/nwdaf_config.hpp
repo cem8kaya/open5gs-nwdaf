@@ -9,6 +9,9 @@ public:
 
     std::string nf_instance_id;
     std::string plmn_mcc, plmn_mnc;
+    int         served_snssai_sst = 1;
+    std::string served_snssai_sd = "000001";
+    std::string served_dnn = "internet";
     std::string sbi_bind_address;
     int         sbi_port = 7779;
 
@@ -29,6 +32,7 @@ public:
 
     std::string model_dir;
     double      anomaly_contamination    = 0.10;
+    unsigned int anomaly_seed            = 0;
     int         anomaly_min_samples      = 10;
     double      baseline_stddev_min_kbps = 0.5;
     double      ewma_alpha               = 0.3;
@@ -56,4 +60,7 @@ public:
     std::string tls_cert_file = "/etc/open5gs/tls/nwdaf.pem";
     std::string tls_key_file  = "/etc/open5gs/tls/nwdaf.key";
     std::string tls_ca_file   = "/etc/open5gs/tls/ca.pem";
+
+    // P1-4: OAuth 2.0 access-token auth
+    bool oauth_enabled = false;
 };

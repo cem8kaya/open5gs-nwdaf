@@ -10,10 +10,28 @@ ExecStart=/usr/local/bin/open5gs-nwdafd --config /etc/open5gs/nwdaf.yaml
 ExecReload=/bin/kill -HUP $MAINPID
 Restart=on-failure
 RestartSec=5
-User=root
+User=open5gs
+Group=open5gs
+
 StandardOutput=journal
 StandardError=journal
 SyslogIdentifier=open5gs-nwdafd
+
+# Systemd Hardening (P2-3)
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RestrictRealtime=yes
+# Allow write access to models, db, logs
+ReadWritePaths=/opt/nwdaf /var/log/open5gs
+
 
 [Install]
 WantedBy=multi-user.target

@@ -50,7 +50,9 @@ sudo systemctl enable --now open5gs-nwdafd
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/nwdaf-analytics/v1/health` | Health check |
+| GET | `/nwdaf-analytics/v1/health` | Health check (returns UP immediately) |
+| GET | `/nwdaf-analytics/v1/ready` | Readiness check (returns READY when ML models are fitted, 503 otherwise) |
+| GET | `/metrics` | Prometheus metrics endpoint |
 | GET | `/nwdaf-analytics/v1/analytics?analyticsId=<ID>` | Get analytics |
 | POST | `/nwdaf-analytics/v1/subscriptions` | Create subscription |
 | GET | `/nwdaf-analytics/v1/subscriptions` | List subscriptions |
@@ -87,12 +89,17 @@ All deployment-specific values are in `config/nwdaf.yaml`:
 
 | Parameter | Default | Description |
 |---|---|---|
+| `nf_instance_id` | none | **Mandatory.** Must be a valid UUID |
 | `plmn_mcc` / `plmn_mnc` | 999/70 | Test PLMN |
 | `nf_service_names` | AMF→amfd etc. | Open5GS unit suffix map |
 | `throughput_interfaces` | ogstun | UPF tunnel interfaces |
 | `supi_regex` | `imsi-(\d{15})` | Open5GS v2.7.6 format |
 | `sbi_port` | 7779 | Must not conflict with 7777 |
 | `nrf_uri` | 127.0.0.1:7777 | NRF for registration |
+| `rate_limit_per_ip_rps` | 10 | Global RPS rate-limit per IP |
+| `network_performance_weights` | 0.6/0.2/0.2 | nfHealth/DL/PDU score weights (must sum to 1.0) |
+| `anomaly_seed` | 0 | Deterministic ML seed for tests (0 = random) |
+| `tls_enabled` | false | Enable TLS / mTLS (requires OpenSSL) |
 
 ---
 
@@ -112,7 +119,9 @@ NwdafCollector  →  NwdafAnalyticsEngine  →  NwdafServer (cpp-httplib)
 2. **AMF regex**: `imsi-` prefix (Open5GS v2.7.6); configurable via `supi_regex`
 3. **Throughput**: Reads `/sys/class/net/ogstun/statistics/` — gtp5g bypasses tcpdump/eBPF
 4. **Idle baseline guard**: `baseline_stddev_min_kbps` prevents false positives on zero traffic
-5. **NETWORK_PERFORMANCE weights**: Fixed 0.6/0.2/0.2 (nfHealth/DL/PDU)
+5. **NETWORK_PERFORMANCE weights**: Configurable via `network_performance_weights`, validated to sum to 1.0
+6. **Disk Safety**: ML models use atomic write-then-rename for corruption-free persistence.
+7. **Rate Limiting**: Built-in Token Bucket rate limiting per IP and global RPS.
 
 ---
 

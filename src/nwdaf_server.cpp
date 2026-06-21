@@ -15,8 +15,13 @@ NwdafServer::NwdafServer(NwdafAnalyticsEngine& engine,
     // otherwise fall back to plain HTTP.
 #ifdef NWDAF_USE_TLS
     if (config.tls_enabled) {
-        svr_ = std::make_unique<httplib::SSLServer>(
+        auto ssl_svr = std::make_unique<httplib::SSLServer>(
             config.tls_cert_file.c_str(), config.tls_key_file.c_str());
+        if (!ssl_svr->is_valid()) {
+            spdlog::error("Failed to load TLS cert={} or key={}", config.tls_cert_file, config.tls_key_file);
+            throw std::runtime_error("Invalid TLS certificate or key path");
+        }
+        svr_ = std::move(ssl_svr);
         spdlog::info("TLS enabled: cert={} key={}", config.tls_cert_file, config.tls_key_file);
     } else {
         svr_ = std::make_unique<httplib::Server>();
@@ -32,7 +37,13 @@ NwdafServer::NwdafServer(NwdafAnalyticsEngine& engine,
 }
 
 static json errorResponse(int status, const std::string& title, const std::string& cause) {
-    return {{"title", title}, {"status", status}, {"cause", cause}};
+    return {
+        {"type", "about:blank"},
+        {"title", title},
+        {"status", status},
+        {"detail", cause},
+        {"cause", cause}
+    };
 }
 
 static std::string nowISO() {
@@ -57,6 +68,32 @@ static std::string generateShortId() {
 }
 
 void NwdafServer::setupRoutes() {
+    // P1-4: OAuth 2.0 access-token auth
+    svr_->set_pre_routing_handler([this](const httplib::Request& req, httplib::Response& res) {
+        if (config_.oauth_enabled) {
+            // Allow healthcheck without auth
+            if (req.path == "/nwdaf-analytics/v1/health") {
+                return httplib::Server::HandlerResponse::Unhandled;
+            }
+            if (req.has_header("Authorization")) {
+                std::string auth = req.get_header_value("Authorization");
+                if (auth.find("Bearer ") == 0) {
+                    std::string token = auth.substr(7);
+                    // Minimal token check: ensure it's not empty. 
+                    // In a full implementation, verify signature or call NRF token endpoint.
+                    if (!token.empty()) {
+                        return httplib::Server::HandlerResponse::Unhandled;
+                    }
+                }
+            }
+            res.status = 401;
+            res.set_content(errorResponse(401, "Unauthorized", "Missing or invalid OAuth2.0 access token").dump(),
+                            "application/problem+json");
+            return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+    });
+
     svr_->Get("/nwdaf-analytics/v1/health",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleHealth(req, res);
@@ -65,6 +102,12 @@ void NwdafServer::setupRoutes() {
     svr_->Get("/nwdaf-analytics/v1/analytics",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleGetAnalytics(req, res);
+        });
+
+    // P1-1: Spec-compliant POST for Nnwdaf_AnalyticsInfo
+    svr_->Post("/nnwdaf-analyticsinfo/v1/analytics",
+        [this](const httplib::Request& req, httplib::Response& res) {
+            handlePostAnalytics(req, res);
         });
 
     svr_->Post("/nwdaf-analytics/v1/subscriptions",
@@ -97,6 +140,12 @@ void NwdafServer::setupRoutes() {
         [this](const httplib::Request& req, httplib::Response& res) {
             handleMetrics(req, res);
         });
+
+    // P2-5: Readiness endpoint
+    svr_->Get("/nwdaf-analytics/v1/ready",
+        [this](const httplib::Request& req, httplib::Response& res) {
+            handleReady(req, res);
+        });
 }
 
 void NwdafServer::start() {
@@ -118,7 +167,7 @@ static bool applyRateLimit(RateLimiter& rl,
         res.set_header("Retry-After", "1");
         res.status = 429;
         res.set_content(errorResponse(429, "Too Many Requests",
-            "Rate limit exceeded — retry after 1s").dump(), "application/json");
+            "Rate limit exceeded — retry after 1s").dump(), "application/problem+json");
         return false;
     }
     return true;
@@ -157,6 +206,20 @@ void NwdafServer::handleHealth(const httplib::Request& req, httplib::Response& r
     res.status = 200;
 }
 
+void NwdafServer::handleReady(const httplib::Request& req, httplib::Response& res) {
+    if (!applyRateLimit(rate_limiter_, req, res)) return;
+    
+    if (engine_.isReady()) {
+        json body = {{"status", "READY"}};
+        res.set_content(body.dump(), "application/json");
+        res.status = 200;
+    } else {
+        json body = {{"status", "TRAINING"}, {"message", "ML models not fully fitted yet"}};
+        res.set_content(body.dump(), "application/json");
+        res.status = 503;
+    }
+}
+
 void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Response& res) {
     if (!applyRateLimit(rate_limiter_, req, res)) return;
 
@@ -175,7 +238,7 @@ void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Respo
 
     if (!req.has_param("analyticsId")) {
         res.set_content(errorResponse(400, "Missing parameter",
-                                      "analyticsId is required").dump(), "application/json");
+                                      "analyticsId is required").dump(), "application/problem+json");
         res.status = 400;
         logAndFinish("", "");
         return;
@@ -194,7 +257,7 @@ void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Respo
     {
         res.set_content(errorResponse(422, "Unprocessable Entity",
                                       "Unknown analyticsId: " + analytics_id).dump(),
-                        "application/json");
+                        "application/problem+json");
         res.status = 422;
         logAndFinish(analytics_id, "");
         return;
@@ -208,7 +271,7 @@ void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Respo
     if (analytics_id == "NF_LOAD" && !supi.empty()) {
         res.set_content(errorResponse(400, "Bad Request",
             "supi parameter is not applicable for NF_LOAD analytics "
-            "(NF load is network-wide, not per-UE)").dump(), "application/json");
+            "(NF load is network-wide, not per-UE)").dump(), "application/problem+json");
         res.status = 400;
         logAndFinish(analytics_id, supi);
         return;
@@ -243,7 +306,119 @@ void NwdafServer::handleGetAnalytics(const httplib::Request& req, httplib::Respo
         res.status = 200;
     } catch (const std::exception& e) {
         res.set_content(errorResponse(500, "Internal Error", e.what()).dump(),
-                        "application/json");
+                        "application/problem+json");
+        res.status = 500;
+    }
+    logAndFinish(analytics_id, supi);
+}
+
+void NwdafServer::handlePostAnalytics(const httplib::Request& req, httplib::Response& res) {
+    if (!applyRateLimit(rate_limiter_, req, res)) return;
+
+    std::string req_id = resolveReqId(req);
+    auto t0 = std::chrono::steady_clock::now();
+    std::string analytics_id;
+    std::string supi;
+    
+    auto logAndFinish = [&](const std::string& aid, const std::string& u) {
+        auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - t0).count();
+        spdlog::info("[{}] POST analytics analyticsId={} supi={} status={} latency={}ms",
+                     req_id, aid.empty() ? "-" : aid,
+                     u.empty() ? "ALL" : u, res.status, ms);
+        res.set_header("X-Request-Id", req_id);
+    };
+
+    try {
+        json body = json::parse(req.body);
+        if (!body.contains("analyticsId")) {
+            res.set_content(errorResponse(400, "Missing parameter", "analyticsId is required").dump(), "application/problem+json");
+            res.status = 400;
+            logAndFinish("", "");
+            return;
+        }
+        
+        analytics_id = body["analyticsId"].get<std::string>();
+        if (analytics_id == "QOS_SUSTAINABILITY") {
+            analytics_id = "QoS_SUSTAINABILITY";
+        }
+        
+        if (NwdafAnalyticsEngine::VALID_ANALYTICS_IDS.find(analytics_id) == NwdafAnalyticsEngine::VALID_ANALYTICS_IDS.end()) {
+            res.set_content(errorResponse(422, "Unprocessable Entity", "Unknown analyticsId: " + analytics_id).dump(), "application/problem+json");
+            res.status = 422;
+            logAndFinish(analytics_id, "");
+            return;
+        }
+
+        // P1-2: Validate filters
+        if (body.contains("dnn") && body["dnn"].is_string()) {
+            std::string req_dnn = body["dnn"].get<std::string>();
+            if (req_dnn != config_.served_dnn) {
+                res.set_content(errorResponse(400, "Bad Request", "Unsupported DNN: " + req_dnn).dump(), "application/problem+json");
+                res.status = 400;
+                logAndFinish(analytics_id, "");
+                return;
+            }
+        }
+        if (body.contains("snssai") && body["snssai"].is_object()) {
+            auto req_snssai = body["snssai"];
+            int req_sst = req_snssai.value("sst", -1);
+            std::string req_sd = req_snssai.value("sd", "");
+            if (req_sst != config_.served_snssai_sst || (!req_sd.empty() && req_sd != config_.served_snssai_sd)) {
+                res.set_content(errorResponse(400, "Bad Request", "Unsupported S-NSSAI").dump(), "application/problem+json");
+                res.status = 400;
+                logAndFinish(analytics_id, "");
+                return;
+            }
+        }
+
+        if (body.contains("targetUeId") && body["targetUeId"].is_string()) supi = body["targetUeId"].get<std::string>();
+        else if (body.contains("supi") && body["supi"].is_string()) supi = body["supi"].get<std::string>();
+        
+        if (analytics_id == "NF_LOAD" && !supi.empty()) {
+            res.set_content(errorResponse(400, "Bad Request", "targetUeId parameter is not applicable for NF_LOAD analytics").dump(), "application/problem+json");
+            res.status = 400;
+            logAndFinish(analytics_id, supi);
+            return;
+        }
+
+        std::string start_ts, end_ts;
+        if (body.contains("anaReq") && body["anaReq"].is_object()) {
+            auto req = body["anaReq"];
+            if (req.contains("startTs")) start_ts = req["startTs"].get<std::string>();
+            if (req.contains("endTs")) end_ts = req["endTs"].get<std::string>();
+        }
+
+        std::string req_time = nowISO();
+        json anal_data = engine_.compute(analytics_id, supi, start_ts, end_ts);
+        int confidence = anal_data.value("confidence", 80);
+
+        {
+            std::lock_guard<std::mutex> lk(metrics_mutex_);
+            analytics_request_counts_[analytics_id]++;
+            if (analytics_id == "ABNORMAL_BEHAVIOUR")
+                metrics_cache_.anomaly_pct = anal_data.value("anomalyPct", 0.0);
+            else if (analytics_id == "SERVICE_EXPERIENCE")
+                metrics_cache_.mos_score   = anal_data.value("mosScore", 2.0);
+            else if (analytics_id == "NETWORK_PERFORMANCE")
+                metrics_cache_.network_performance_score = anal_data.value("overallScore", 0.0);
+        }
+
+        json response = {
+            {"analyticsId",  analytics_id},
+            {"requestTime",  req_time},
+            {"timeStampGen", nowISO()},
+            {"validity",     60},
+            {"confidence",   confidence},
+            {"analData",     anal_data}
+        };
+        res.set_content(response.dump(), "application/json");
+        res.status = 200;
+    } catch (const json::parse_error& e) {
+        res.set_content(errorResponse(400, "Bad Request", "Invalid JSON body").dump(), "application/problem+json");
+        res.status = 400;
+    } catch (const std::exception& e) {
+        res.set_content(errorResponse(500, "Internal Error", e.what()).dump(), "application/problem+json");
         res.status = 500;
     }
     logAndFinish(analytics_id, supi);
@@ -257,7 +432,7 @@ void NwdafServer::handleCreateSubscription(const httplib::Request& req, httplib:
         if (!body.contains("analyticsId") || !body.contains("notifUri")) {
             res.set_content(errorResponse(400, "Bad Request",
                                           "analyticsId and notifUri are required").dump(),
-                            "application/json");
+                            "application/problem+json");
             res.status = 400;
             res.set_header("X-Request-Id", req_id);
             return;
@@ -274,7 +449,7 @@ void NwdafServer::handleCreateSubscription(const httplib::Request& req, httplib:
         res.set_content(response.dump(), "application/json");
         res.status = 201;
     } catch (const std::exception& e) {
-        res.set_content(errorResponse(400, "Bad Request", e.what()).dump(), "application/json");
+        res.set_content(errorResponse(400, "Bad Request", e.what()).dump(), "application/problem+json");
         res.status = 400;
     }
     res.set_header("X-Request-Id", req_id);
@@ -286,7 +461,7 @@ void NwdafServer::handleGetSubscription(const httplib::Request& req, httplib::Re
     std::string sub_id = req.matches[1];
     if (!subs_.exists(sub_id)) {
         res.set_content(errorResponse(404, "Not Found", "Subscription not found").dump(),
-                        "application/json");
+                        "application/problem+json");
         res.status = 404;
         res.set_header("X-Request-Id", req_id);
         return;
@@ -310,7 +485,7 @@ void NwdafServer::handleDeleteSubscription(const httplib::Request& req, httplib:
     std::string sub_id = req.matches[1];
     if (!subs_.remove(sub_id)) {
         res.set_content(errorResponse(404, "Not Found", "Subscription not found").dump(),
-                        "application/json");
+                        "application/problem+json");
         res.status = 404;
         res.set_header("X-Request-Id", req_id);
         return;
@@ -346,7 +521,7 @@ void NwdafServer::handleTrainModel(const httplib::Request& req, httplib::Respons
         res.set_content(result.dump(), "application/json");
         res.status = 200;
     } catch (const std::exception& e) {
-        res.set_content(errorResponse(500, "Training failed", e.what()).dump(), "application/json");
+        res.set_content(errorResponse(500, "Training failed", e.what()).dump(), "application/problem+json");
         res.status = 500;
     }
     res.set_header("X-Request-Id", req_id);

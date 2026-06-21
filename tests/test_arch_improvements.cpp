@@ -37,6 +37,7 @@ static NwdafConfig makeArchTestConfig() {
     cfg.nrf_register_on_startup = false;
     cfg.model_dir               = "/tmp/nwdaf_arch_test_models";
     cfg.anomaly_contamination   = 0.10;
+    cfg.anomaly_seed            = 42;
     cfg.anomaly_min_samples     = 10;
     cfg.baseline_stddev_min_kbps = 0.5;
     cfg.ewma_alpha              = 0.3;
@@ -204,6 +205,7 @@ TEST_CASE("ARCH-03: NwdafConfig::load validates weight sum and throws on mismatc
         std::ofstream f(yaml_path);
         // weights sum to 1.5 — must be rejected
         f << "nwdaf:\n"
+          << "  nf_instance_id: \"00000000-0000-0000-0000-000000000000\"\n"
           << "  network_performance_weights:\n"
           << "    nf_health: 0.5\n"
           << "    dl_score:  0.5\n"
@@ -218,6 +220,7 @@ TEST_CASE("ARCH-03: NwdafConfig::load accepts weights that sum to exactly 1.0") 
     {
         std::ofstream f(yaml_path);
         f << "nwdaf:\n"
+          << "  nf_instance_id: \"00000000-0000-0000-0000-000000000000\"\n"
           << "  network_performance_weights:\n"
           << "    nf_health: 0.7\n"
           << "    dl_score:  0.2\n"
@@ -353,6 +356,7 @@ TEST_CASE("ARCH-05: NwdafConfig::load reads TLS fields from YAML") {
     {
         std::ofstream f(yaml_path);
         f << "nwdaf:\n"
+          << "  nf_instance_id: \"00000000-0000-0000-0000-000000000000\"\n"
           << "  tls_enabled: true\n"
           << "  tls_cert_file: \"/tmp/test.pem\"\n"
           << "  tls_key_file:  \"/tmp/test.key\"\n"
@@ -372,6 +376,7 @@ TEST_CASE("ARCH-05: NwdafConfig::load defaults tls_enabled to false when key abs
     {
         std::ofstream f(yaml_path);
         f << "nwdaf:\n"
+          << "  nf_instance_id: \"00000000-0000-0000-0000-000000000000\"\n"
           << "  sbi_port: 7779\n"; // minimal config, no TLS keys
     }
     NwdafConfig cfg;

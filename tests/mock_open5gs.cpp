@@ -2,16 +2,6 @@
 #include <chrono>
 #include <ctime>
 
-static std::string nowISO() {
-    auto now = std::chrono::system_clock::now();
-    auto t = std::chrono::system_clock::to_time_t(now);
-    struct tm tm_buf;
-    gmtime_r(&t, &tm_buf);
-    char buf[32];
-    strftime(buf, sizeof(buf), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
-    return buf;
-}
-
 MockNwdafCollector::MockNwdafCollector(const NwdafConfig& cfg) : NwdafCollector(cfg) {}
 
 void MockNwdafCollector::setAmfLines(const std::vector<std::string>& lines) {
@@ -38,6 +28,7 @@ void MockNwdafCollector::setNfMetrics(const std::vector<NfMetric>& metrics) {
 }
 
 std::vector<std::string> MockNwdafCollector::readJournalLines(const std::string& unit, int n) {
+    (void)n;
     if (unit == config_.nf_service_names.at("AMF"))
         return mock_amf_lines_;
     if (unit == config_.nf_service_names.at("SMF"))

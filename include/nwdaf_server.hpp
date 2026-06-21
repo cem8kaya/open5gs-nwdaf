@@ -39,7 +39,10 @@ private:
     void setupRoutes();
 
     void handleHealth(const httplib::Request&, httplib::Response&);
-    void handleGetAnalytics(const httplib::Request&, httplib::Response&);
+    void handleReady(const httplib::Request& req, httplib::Response& res);
+
+    void handleGetAnalytics(const httplib::Request& req, httplib::Response& res);
+    void handlePostAnalytics(const httplib::Request&, httplib::Response&);
     void handleCreateSubscription(const httplib::Request&, httplib::Response&);
     void handleGetSubscription(const httplib::Request&, httplib::Response&);
     void handleDeleteSubscription(const httplib::Request&, httplib::Response&);

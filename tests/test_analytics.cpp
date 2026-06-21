@@ -48,19 +48,6 @@ static std::vector<NfMetric> makeNfMetrics(int total, int active, double load_pc
     return out;
 }
 
-// Helper to inject throughput history into mock collector
-static void injectThroughput(MockNwdafCollector& col,
-                              const std::vector<std::pair<double,double>>& samples)
-{
-    // We need to call startBackgroundCollection-less; instead just use public API via
-    // injecting via the background deque through collectUPFThroughput mock.
-    // Since MockNwdafCollector returns incremental net stats, we call
-    // collectUPFThroughput repeatedly — but that's slow. Instead, we expose a method
-    // on the analytics engine that takes history directly. For tests, we'll use a
-    // subclass trick: call bgLoop-equivalent by public collectUPFThroughput many times.
-    // Simpler: set net stats so each call produces known samples.
-    (void)col; (void)samples; // handled per-test via setNetStats
-}
 
 TEST_CASE("NF_LOAD returns STABLE when all NFs active") {
     auto cfg = makeTestConfig();
@@ -474,6 +461,8 @@ TEST_CASE("PROD-07: IsolationForest save/load round-trip with metadata") {
 TEST_CASE("PROD-07: saveModels writes to tmp then renames (no partial file on disk)") {
     auto cfg = makeTestConfig();
     cfg.model_dir = "/tmp/nwdaf_prod07_engine";
+    cfg.anomaly_min_samples = 0;
+    cfg.baseline_stddev_min_kbps = 0.0;
     std::filesystem::create_directories(cfg.model_dir);
     std::string final_path = cfg.model_dir + "/isolation_forest.json";
     // Remove any previous file
@@ -489,8 +478,8 @@ TEST_CASE("PROD-07: saveModels writes to tmp then renames (no partial file on di
     col.stopBackgroundCollection();
 
     json r = engine.retrain();
-    // Either trained or skipped (if not enough samples in short window)
-    REQUIRE((r["status"] == "trained" || r["status"] == "skipped"));
+    // Either trained or insufficient data/baseline (if not enough samples in short window)
+    REQUIRE((r["status"] == "trained" || r["status"] == "INSUFFICIENT_DATA" || r["status"] == "BASELINE_TOO_LOW"));
 
     if (r["status"] == "trained") {
         // The final file must exist; no .tmp.* file should remain

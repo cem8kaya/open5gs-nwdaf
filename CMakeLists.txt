@@ -4,12 +4,24 @@ project(open5gs-nwdaf VERSION 1.0.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# P0-4: Hardening flags and warnings as errors
+add_compile_options(-Wall -Wextra -Werror -O2 -D_FORTIFY_SOURCE=2 -fstack-protector-strong)
+if(NOT APPLE)
+    add_compile_options(-fPIE)
+    add_link_options(-pie -Wl,-z,relro,-z,now)
+endif()
+
+# Suppress FetchContent timestamp policy warning
+if(POLICY CMP0135)
+    cmake_policy(SET CMP0135 NEW)
+endif()
+
 option(NWDAF_USE_SD_JOURNAL       "Use libsystemd sd-journal API (requires systemd dev headers)" ON)
 option(NWDAF_BUILD_TESTS          "Build unit and integration tests" ON)
 option(NWDAF_ENABLE_PUSH_DELIVERY "Enable subscription push delivery background thread (COMP-01)" ON)
 # ARCH-05: TLS / mTLS for SBI interface (TS 33.501 §13.3).
 # Requires OpenSSL dev headers; cpp-httplib uses CPPHTTPLIB_OPENSSL_SUPPORT.
-option(NWDAF_USE_TLS              "Enable TLS for SBI (requires OpenSSL)" OFF)
+option(NWDAF_USE_TLS              "Enable TLS for SBI (requires OpenSSL)" ON)
 
 # ── Dependencies ─────────────────────────────────────────────────────────────
 find_package(PkgConfig REQUIRED)
