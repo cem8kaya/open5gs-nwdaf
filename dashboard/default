@@ -1,0 +1,12 @@
+server {
+    listen 80 default_server;
+    root /var/www/html;
+    index index.html;
+    server_name _;
+    location / {
+        try_files $uri $uri/ =404;
+    }
+    location /nwdaf-analytics/ {
+        proxy_pass http://127.0.0.1:7779/nwdaf-analytics/;
+    }
+}

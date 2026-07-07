@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>NWDAF Operations Dashboard</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script type="importmap">
+  {
+    "imports": {
+      "react": "https://esm.sh/react@18.2.0",
+      "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+      "recharts": "https://esm.sh/recharts@2.12.3?deps=react@18.2.0,react-dom@18.2.0",
+      "lucide-react": "https://esm.sh/lucide-react@0.359.0?deps=react@18.2.0"
+    }
+  }
+  </script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50 text-slate-900">
+  <div id="root">
+    <div style="display:flex; height:100vh; align-items:center; justify-content:center; flex-direction:column; gap:1rem;">
+      <div class="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+      <p class="text-gray-400 font-mono">Compiling React Dashboard...</p>
+    </div>
+  </div>
+  <script type="module">
+    import React from 'react';
+    import { createRoot } from 'react-dom/client';
+    import * as Recharts from 'recharts';
+    import * as LucideReact from 'lucide-react';
+    window.React = React;
+    window.recharts = Recharts;
+    window.lucideReact = LucideReact;
+    window.NWDAF_BASE_URL = window.location.origin + "/nwdaf-analytics/v1";
+    async function loadApp() {
+      try {
+        const res = await fetch('./nwdaf_dashboard.jsx');
+        if (!res.ok) throw new Error("Failed to fetch JSX file");
+        let jsxCode = await res.text();
+        jsxCode = jsxCode.replace(/import\s+React,\s*\{([^}]+)\}\s+from\s+['"]react['"];?/g, (match, p1) => {
+          return `const { ${p1} } = window.React;`;
+        });
+        jsxCode = jsxCode.replace(/import\s+React\s+from\s+['"]react['"];?/g, '');
+        jsxCode = jsxCode.replace(/import\s+\{([^}]+)\}\s+from\s+['"]recharts['"];?/g, (match, p1) => {
+          return `const { ${p1.replace(/\bas\b/g, ':').replace(/\s+/g, ' ')} } = window.recharts;`;
+        });
+        jsxCode = jsxCode.replace(/import\s+\{([^}]+)\}\s+from\s+['"]lucide-react['"];?/g, (match, p1) => {
+          return `const { ${p1.replace(/\bas\b/g, ':').replace(/\s+/g, ' ')} } = window.lucideReact;`;
+        });
+        jsxCode = jsxCode.replace(/export\s+default\s+function\s+App/, 'window.App = function App');
+        const compiled = Babel.transform(jsxCode, { presets: [['react', {runtime: 'classic'}]] }).code;
+        eval(compiled);
+        const root = createRoot(document.getElementById('root'));
+        root.render(React.createElement(window.App));
+      } catch (err) {
+        document.getElementById('root').innerHTML = `<div style="padding:2rem;color:red;font-family:monospace;"><h3>Failed to load App</h3><p>${err.message}</p></div>`;
+        console.error(err);
+      }
+    }
+    loadApp();
+  </script>
+</body>
+</html>
