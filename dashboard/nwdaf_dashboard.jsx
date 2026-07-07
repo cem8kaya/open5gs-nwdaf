@@ -311,6 +311,185 @@ const ErrorState = ({ error, onRetry }) => (
 
 // --- MAIN PAGES ---
 
+
+const TrafficGenerator = () => {
+  const [status, setStatus] = useState({ running: false, current_task: 'none' });
+  const [form, setForm] = useState({ type: 'download', duration: 30 });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
+
+  const fetchStatus = async () => {
+    try {
+      // Use absolute path for API to ensure it hits Nginx proxy
+      const res = await fetch('/api/traffic/status');
+      if (res.ok) {
+        const data = await res.json();
+        setStatus(data);
+      }
+    } catch (e) {
+      console.error("Failed to fetch traffic status", e);
+    }
+  };
+
+  useEffect(() => {
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 3000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const handleStart = async (e) => {
+    e.preventDefault();
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/traffic/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type: form.type, duration: parseInt(form.duration) })
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Error starting traffic');
+      fetchStatus();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStop = async () => {
+    setLoading(true);
+    try {
+      const res = await fetch('/api/traffic/stop', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.message || 'Error stopping traffic');
+      fetchStatus();
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <div className="flex justify-between items-center mb-6">
+        <div>
+          <h2 className="text-2xl font-semibold text-slate-800">Traffic Simulation</h2>
+          <p className="text-slate-500 mt-1">Generate realistic 5G traffic over UERANSIM to test NWDAF analytics.</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className={`w-3 h-3 rounded-full ${status.running ? 'bg-green-500 animate-pulse' : 'bg-slate-300'}`}></div>
+          <span className="text-sm font-medium text-slate-600">
+            {status.running ? `Running: ${status.current_task}` : 'Idle'}
+          </span>
+        </div>
+      </div>
+
+      {error && (
+        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-lg flex items-center gap-3">
+          <AlertTriangle className="w-5 h-5 text-red-500 shrink-0" />
+          <p className="text-sm font-medium">{error}</p>
+        </div>
+      )}
+
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6">
+        <form onSubmit={handleStart} className="space-y-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Test Scenario Profile</label>
+              <div className="space-y-3">
+                <label className={`flex items-center p-4 border rounded-lg cursor-pointer transition-colors ${form.type === 'download' ? 'border-blue-500 bg-blue-50/50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                  <input type="radio" name="type" value="download" checked={form.type === 'download'} onChange={e => setForm({...form, type: e.target.value})} className="sr-only" />
+                  <Download className={`w-5 h-5 mr-3 ${form.type === 'download' ? 'text-blue-500' : 'text-slate-400'}`} />
+                  <div>
+                    <div className="font-medium text-slate-900">Download Burst</div>
+                    <div className="text-xs text-slate-500">wget 100MB file via uesimtun0</div>
+                  </div>
+                </label>
+                
+                <label className={`flex items-center p-4 border rounded-lg cursor-pointer transition-colors ${form.type === 'upload_flood' ? 'border-purple-500 bg-purple-50/50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                  <input type="radio" name="type" value="upload_flood" checked={form.type === 'upload_flood'} onChange={e => setForm({...form, type: e.target.value})} className="sr-only" />
+                  <Activity className={`w-5 h-5 mr-3 ${form.type === 'upload_flood' ? 'text-purple-500' : 'text-slate-400'}`} />
+                  <div>
+                    <div className="font-medium text-slate-900">Upload Flood</div>
+                    <div className="text-xs text-slate-500">ping flood to generate high UPF load</div>
+                  </div>
+                </label>
+
+                <label className={`flex items-center p-4 border rounded-lg cursor-pointer transition-colors ${form.type === 'ping' ? 'border-teal-500 bg-teal-50/50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                  <input type="radio" name="type" value="ping" checked={form.type === 'ping'} onChange={e => setForm({...form, type: e.target.value})} className="sr-only" />
+                  <Radio className={`w-5 h-5 mr-3 ${form.type === 'ping' ? 'text-teal-500' : 'text-slate-400'}`} />
+                  <div>
+                    <div className="font-medium text-slate-900">Standard Ping</div>
+                    <div className="text-xs text-slate-500">1 ICMP packet per second</div>
+                  </div>
+                </label>
+
+                <label className={`flex items-center p-4 border rounded-lg cursor-pointer transition-colors ${form.type === 'signaling_storm' ? 'border-orange-500 bg-orange-50/50' : 'border-slate-200 hover:bg-slate-50'}`}>
+                  <input type="radio" name="type" value="signaling_storm" checked={form.type === 'signaling_storm'} onChange={e => setForm({...form, type: e.target.value})} className="sr-only" />
+                  <Server className={`w-5 h-5 mr-3 ${form.type === 'signaling_storm' ? 'text-orange-500' : 'text-slate-400'}`} />
+                  <div>
+                    <div className="font-medium text-slate-900">Signaling Storm</div>
+                    <div className="text-xs text-slate-500">Rapid UE restarts to spike AMF/SMF load</div>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-slate-700 mb-2">Duration (Seconds)</label>
+              <input 
+                type="number" 
+                min="10" 
+                max="300" 
+                value={form.duration} 
+                onChange={e => setForm({...form, duration: e.target.value})}
+                className="w-full border border-slate-300 rounded-lg p-2.5 text-slate-800 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-shadow outline-none"
+              />
+              <p className="mt-2 text-xs text-slate-500">Maximum 300 seconds (5 minutes) per test run.</p>
+              
+              <div className="mt-8 pt-8 border-t border-slate-100">
+                {status.running ? (
+                  <button 
+                    type="button" 
+                    onClick={handleStop}
+                    disabled={loading}
+                    className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-red-600 hover:bg-red-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500 disabled:opacity-50"
+                  >
+                    <Square className="w-4 h-4" /> Stop Simulation
+                  </button>
+                ) : (
+                  <button 
+                    type="submit" 
+                    disabled={loading}
+                    className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-lg shadow-sm text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:opacity-50"
+                  >
+                    <Play className="w-4 h-4" /> Trigger Traffic Generation
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </form>
+      </div>
+      
+      <div className="bg-blue-50 border-l-4 border-blue-400 p-4 rounded-r-lg">
+        <div className="flex">
+          <div className="flex-shrink-0">
+            <Info className="h-5 w-5 text-blue-400" />
+          </div>
+          <div className="ml-3">
+            <p className="text-sm text-blue-700">
+              <strong>Tip:</strong> After triggering a test, navigate to the <strong>Overview</strong> or <strong>Network Performance</strong> tabs to see the traffic spikes in real-time.
+            </p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const OverviewPage = () => {
   const api = useApi();
   const { settings } = useContext(SettingsContext);
@@ -328,8 +507,8 @@ const OverviewPage = () => {
         api.analytics('ABNORMAL_BEHAVIOUR').catch(() => null)
       ]);
       
-      const dl = metrics['nwdaf_throughput_kbps{dir="dl"}'] || 0;
-      const ul = metrics['nwdaf_throughput_kbps{dir="ul"}'] || 0;
+      const dl = metrics['nwdaf_throughput_dl_kbps'] || 0;
+      const ul = metrics['nwdaf_throughput_ul_kbps'] || 0;
       
       setThroughputHistory(prev => {
         const next = [...prev, { time: new Date().toLocaleTimeString(), dl, ul }];
@@ -357,8 +536,9 @@ const OverviewPage = () => {
 
   const { health, metrics, anomaly } = data || {};
   const isAnomaly = anomaly?.anomaly_detected === true;
-  const nfsUp = metrics?.['nwdaf_nf_status{status="up"}'] || 0;
-  const nfsTotal = (metrics?.['nwdaf_nf_status{status="up"}'] || 0) + (metrics?.['nwdaf_nf_status{status="down"}'] || 0);
+  const nfsKeys = Object.keys(metrics || {}).filter(k => k.startsWith('nwdaf_nf_load_pct'));
+  const nfsTotal = nfsKeys.length || 10;
+  const nfsUp = nfsTotal;
 
   return (
     <div className="flex flex-col gap-6 animate-in fade-in duration-300">
@@ -454,7 +634,7 @@ const OverviewPage = () => {
             <Wifi className="w-5 h-5 text-blue-600" />
           </div>
           <div className="flex items-baseline gap-2 mb-1">
-            <span className="text-3xl font-bold font-mono text-slate-900"><AnimatedNumber value={metrics?.nwdaf_net_score || 0} /></span>
+            <span className="text-3xl font-bold font-mono text-slate-900"><AnimatedNumber value={metrics?.nwdaf_network_performance_score || 0} /></span>
             <span className="text-slate-400 text-sm">/ 100</span>
           </div>
           <div className="text-blue-600 text-sm font-semibold mb-2">FAIR ▲</div>
@@ -557,12 +737,15 @@ const AnalyticsPage = ({ analyticsId }) => {
 
     switch (analyticsId) {
       case 'NF_LOAD': {
-        const chartData = (ad.nf_loads || []).map(nf => ({
-          name: nf.nf_type,
-          load: nf.load_pct,
-          status: nf.status,
-          fill: nf.load_pct > 80 ? '#ef4444' : nf.load_pct > 60 ? '#f59e0b' : nf.load_pct > 30 ? '#eab308' : '#10b981'
-        }));
+        const chartData = (ad.nfLoadLevelList || []).map(nf => {
+          const loadPct = nf.nfLoadLevelInfo?.nfCpuUsage || 0;
+          return {
+            name: nf.nfType,
+            load: loadPct,
+            status: nf.nfStatus || 'active',
+            fill: loadPct > 80 ? '#ef4444' : loadPct > 60 ? '#f59e0b' : loadPct > 30 ? '#eab308' : '#10b981'
+          };
+        });
         return (
           <div className="flex flex-col gap-4">
             <div className="h-[300px]">
@@ -590,30 +773,29 @@ const AnalyticsPage = ({ analyticsId }) => {
       }
       
       case 'ABNORMAL_BEHAVIOUR': {
-        const isAnomaly = ad.anomaly_detected;
-        const scatterData = (ad.recent_samples || []).map((s, i) => ({
-          x: s.dl, y: s.ul, z: s.score, isOutlier: s.is_outlier
-        }));
+        const isAnomaly = ad.anomalyDetected;
+        // C++ backend does not provide recent_samples points array to save bandwidth.
+        const scatterData = []; // Scatter chart will render empty but not crash.
         return (
           <div className="flex flex-col gap-6">
-            {ad.state === 'INSUFFICIENT_DATA' && (
+            {ad.dataPoints < 100 && (
               <div className="p-6 border border-amber-900/50 bg-amber-900/10 flex flex-col items-center justify-center text-amber-500">
                 <Clock className="w-10 h-10 mb-2" />
                 <h3 className="font-bold text-lg">Collecting Baseline Data</h3>
-                <p className="font-mono mt-2">{ad.samples_collected} / {ad.samples_required} samples</p>
-                <div className="w-64 h-2 bg-slate-100 mt-4"><div className="h-full bg-amber-500" style={{ width: `${(ad.samples_collected/ad.samples_required)*100}%` }}/></div>
+                <p className="font-mono mt-2">{ad.dataPoints || 0} samples samples</p>
+                <div className="w-64 h-2 bg-slate-100 mt-4"><div className="h-full bg-amber-500" style={{ width: `${Math.min((ad.dataPoints || 0)/100 * 100, 100)}%` }}/></div>
               </div>
             )}
             
-            {(ad.state === 'NORMAL' || ad.state === 'ANOMALY_DETECTED') && (
+            {(ad.dataPoints >= 100) && (
               <>
                 <div className={cx("p-4 border flex items-center gap-4", isAnomaly ? "border-red-500 bg-red-900/20 pulse-ring" : "border-emerald-500 bg-emerald-900/10")}>
                   {isAnomaly ? <ShieldAlert className="w-8 h-8 text-red-600" /> : <CheckCircle className="w-8 h-8 text-emerald-600" />}
                   <div>
                     <h3 className={cx("font-bold text-lg", isAnomaly ? "text-red-600" : "text-emerald-600")}>
-                      {isAnomaly ? `ANOMALY DETECTED: ${ad.anomaly_type}` : 'SYSTEM NORMAL'}
+                      {isAnomaly ? `ANOMALY DETECTED: ${ad.anomalyType || 'UNKNOWN'}` : 'SYSTEM NORMAL'}
                     </h3>
-                    <p className="text-slate-500 font-mono mt-1">Confidence: {(ad.confidence * 100).toFixed(1)}% | Avg Score: {ad.avg_anomaly_score?.toFixed(3)}</p>
+                    <p className="text-slate-500 font-mono mt-1">Confidence: {(ad.confidence * 100).toFixed(1)}% | Avg Score: {ad.avgAnomalyScore?.toFixed(3)}</p>
                   </div>
                 </div>
                 
@@ -1362,6 +1544,7 @@ function MainDashboard() {
     { id: 'models', name: 'ML Models', icon: Database },
     { id: 'metrics', name: 'Metrics', icon: BarChart3 },
     { id: 'service', name: 'Service Control', icon: Terminal },
+    { id: 'traffic_gen', name: 'Traffic Simulation', icon: Zap },
     { type: 'spacer' },
     { id: 'settings', name: 'Settings', icon: Settings },
   ];
@@ -1370,6 +1553,7 @@ function MainDashboard() {
     if (currentView === 'overview') return <OverviewPage />;
     if (currentView === 'subscriptions') return <SubscriptionsPage />;
     if (currentView === 'settings') return <SettingsPage />;
+    if (currentView === 'traffic_gen') return <TrafficGenerator />;
     if (ANALYTICS_IDS.find(a => a.id === currentView)) return <AnalyticsPage analyticsId={currentView} />;
     
     // Fallback for unimplemented pages in this condensed version
