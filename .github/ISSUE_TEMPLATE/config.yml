@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 💬 Questions & Discussions
+    url: https://github.com/cem8kaya/open5gs-nwdaf/discussions
+    about: For questions, ideas, and general help, please use Discussions instead of an issue.
+  - name: 🛡️ Security vulnerability
+    url: https://github.com/cem8kaya/open5gs-nwdaf/security/advisories/new
+    about: Report security issues privately — do not open a public issue.
