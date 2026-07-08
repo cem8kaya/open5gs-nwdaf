@@ -11,7 +11,7 @@ import {
   Wifi, BarChart3, Database, Home, Share2, Terminal, LogOut, User, Lock, Mail,
   TrendingUp, TrendingDown, Search, Bell, ChevronDown, ChevronRight,
   Monitor, Globe, Eye, EyeOff, Filter, ArrowUp, ArrowDown, Cpu, Layers,
-  Brain, Gauge, Network
+  Brain, Gauge, Network, Sun, Moon
 } from 'lucide-react';
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
@@ -38,12 +38,13 @@ const TOOLTIP_STYLE = {
   color: '#e1e7ef',
 };
 
-// ─── GLOBAL STYLES (Task #1) ──────────────────────────────────────────────────
+// ─── GLOBAL STYLES (Task #1 + Light Theme) ───────────────────────────────────
 const GlobalStyles = () => (
   <style>{`
     @import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
 
-    :root {
+    /* ── DARK THEME (default) ── */
+    :root, [data-theme="dark"] {
       --bg-base:      #050a14;
       --bg-surface:   #0c1525;
       --bg-elevated:  #111d32;
@@ -63,6 +64,55 @@ const GlobalStyles = () => (
       --err-dim:      rgba(239,68,68,0.12);
       --info:         #3b82f6;
       --info-dim:     rgba(59,130,246,0.12);
+      --card-shadow:  none;
+      --btn-pri-text: #04111e;
+    }
+
+    /* ── LIGHT PREMIUM THEME ── */
+    [data-theme="light"] {
+      --bg-base:      #f0f4f8;
+      --bg-surface:   #ffffff;
+      --bg-elevated:  #e8eef5;
+      --bg-hover:     #dde6f0;
+      --border-sub:   #dce4ef;
+      --border-str:   #b0bdd0;
+      --text-pri:     #0d1829;
+      --text-sec:     #3d5473;
+      --text-mut:     #8099b8;
+      --accent:       #0284c7;
+      --accent-dim:   rgba(2,132,199,0.08);
+      --ok:           #059669;
+      --ok-dim:       rgba(5,150,105,0.08);
+      --warn:         #d97706;
+      --warn-dim:     rgba(217,119,6,0.08);
+      --err:          #dc2626;
+      --err-dim:      rgba(220,38,38,0.08);
+      --info:         #2563eb;
+      --info-dim:     rgba(37,99,235,0.08);
+      --card-shadow:  0 1px 3px rgba(0,0,0,.07), 0 1px 2px rgba(0,0,0,.04);
+      --btn-pri-text: #ffffff;
+    }
+
+    /* Light-specific component overrides */
+    [data-theme="light"] .card         { box-shadow: var(--card-shadow); }
+    [data-theme="light"] .card-elevated{ box-shadow: 0 2px 8px rgba(0,0,0,.08); }
+    [data-theme="light"] .btn-primary  { color: var(--btn-pri-text); }
+    [data-theme="light"] .skeleton {
+      background: linear-gradient(90deg, #e8eef5 25%, #dce4ef 50%, #e8eef5 75%);
+      background-size: 800px 100%;
+    }
+    [data-theme="light"] .scroll::-webkit-scrollbar-thumb { background: var(--border-str); }
+    [data-theme="light"] .grid-bg {
+      background-image:
+        linear-gradient(rgba(2,132,199,.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(2,132,199,.04) 1px, transparent 1px);
+      background-size: 32px 32px;
+    }
+    [data-theme="light"] .pulse-crit { animation: pulseCritLight 2s ease infinite; }
+    @keyframes pulseCritLight {
+      0%   { box-shadow: 0 0 0 0 rgba(220,38,38,.4); }
+      70%  { box-shadow: 0 0 0 8px rgba(220,38,38,0); }
+      100% { box-shadow: 0 0 0 0 rgba(220,38,38,0); }
     }
 
     *, *::before, *::after { box-sizing: border-box; }
@@ -221,6 +271,21 @@ const ToastCtx    = createContext(null);
 const SettingsCtx = createContext(null);
 const ApiCtx      = createContext(null);
 const AuthCtx     = createContext(null);
+const ThemeCtx    = createContext(null);
+
+// ─── THEME PROVIDER ───────────────────────────────────────────────────────────
+const ThemeProvider = ({ children }) => {
+  const [theme, setTheme] = useState(() => {
+    try { return localStorage.getItem('nwdaf_theme') || 'dark'; } catch { return 'dark'; }
+  });
+  const toggle = () => setTheme(t => {
+    const next = t === 'dark' ? 'light' : 'dark';
+    try { localStorage.setItem('nwdaf_theme', next); } catch {}
+    return next;
+  });
+  return <ThemeCtx.Provider value={{ theme, toggle }}>{children}</ThemeCtx.Provider>;
+};
+const useTheme = () => useContext(ThemeCtx);
 
 // ─── TOAST PROVIDER ───────────────────────────────────────────────────────────
 const ToastProvider = ({ children }) => {
@@ -489,7 +554,14 @@ const ChartGrid  = () => <CartesianGrid strokeDasharray="3 3" stroke="#1a2840" v
 const ChartGridH = () => <CartesianGrid strokeDasharray="3 3" stroke="#1a2840" horizontal={false} />;
 const AxisX = (props) => <XAxis stroke="#3d5173" tick={{ fill:'#6b7fa3', fontSize:11 }} tickLine={false} axisLine={false} {...props} />;
 const AxisY = (props) => <YAxis stroke="#3d5173" tick={{ fill:'#6b7fa3', fontSize:11 }} tickLine={false} axisLine={false} {...props} />;
-const ChartTip = (props) => <RechartsTooltip contentStyle={TOOLTIP_STYLE} itemStyle={{color:'#e1e7ef'}} labelStyle={{color:'#6b7fa3',marginBottom:4}} {...props} />;
+const ChartTip = (props) => {
+  const ctx = useContext(ThemeCtx);
+  const isDark = !ctx || ctx.theme === 'dark';
+  const cs = isDark
+    ? TOOLTIP_STYLE
+    : { backgroundColor:'#fff', borderColor:'#b0bdd0', borderRadius:'6px', fontFamily:'JetBrains Mono,monospace', fontSize:'12px', color:'#0d1829', boxShadow:'0 4px 12px rgba(0,0,0,.1)' };
+  return <RechartsTooltip contentStyle={cs} itemStyle={{color: isDark ? '#e1e7ef' : '#0d1829'}} labelStyle={{color: isDark ? '#6b7fa3' : '#3d5473', marginBottom:4}} {...props} />;
+};
 
 // ─── AUTH PAGE (Task #2) ──────────────────────────────────────────────────────
 const AuthPage = () => {
@@ -498,6 +570,7 @@ const AuthPage = () => {
   const [password, setPassword] = useState('');
   const { login, register } = useAuth();
   const toast = useToast();
+  const { theme } = useTheme();
 
   const submit = e => {
     e.preventDefault();
@@ -510,7 +583,7 @@ const AuthPage = () => {
   };
 
   return (
-    <div className="grid-bg" style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:16, background:'var(--bg-base)' }}>
+    <div data-theme={theme} className="grid-bg" style={{ minHeight:'100vh', display:'flex', flexDirection:'column', alignItems:'center', justifyContent:'center', padding:16, background:'var(--bg-base)' }}>
       {/* Brand header */}
       <div style={{ textAlign:'center', marginBottom:32 }}>
         <div style={{ display:'inline-flex', alignItems:'center', justifyContent:'center', width:56, height:56, borderRadius:14, background:'var(--accent-dim)', border:'1px solid rgba(34,211,238,.3)', marginBottom:16 }}>
@@ -574,6 +647,7 @@ const AuthGate = () => {
 // ─── TOP BAR (Task #3) ────────────────────────────────────────────────────────
 const TopBar = ({ onToggleSidebar }) => {
   const { currentUser, logout } = useAuth();
+  const { theme, toggle: toggleTheme } = useTheme();
   const api = useApi();
   const [conn, setConn] = useState({ status: 'CHECKING', latency: 0 });
 
@@ -618,6 +692,23 @@ const TopBar = ({ onToggleSidebar }) => {
             {conn.status === 'UP' ? `${conn.latency}ms` : 'OFFLINE'}
           </span>
         </div>
+
+        {/* Theme toggle */}
+        <button
+          onClick={toggleTheme}
+          title={theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+          style={{
+            display:'flex', alignItems:'center', gap:5,
+            padding:'5px 10px', borderRadius:20, cursor:'pointer',
+            background:'var(--bg-elevated)', border:'1px solid var(--border-sub)',
+            color:'var(--text-sec)', transition:'background .2s, color .2s',
+            fontSize:11, fontWeight:500,
+          }}
+        >
+          {theme === 'dark'
+            ? <><Sun style={{width:13,height:13,color:'#fbbf24'}}/><span>Light</span></>
+            : <><Moon style={{width:13,height:13,color:'#6366f1'}}/><span>Dark</span></>}
+        </button>
 
         <div style={{ width:1, height:20, background:'var(--border-sub)' }} />
 
@@ -1836,6 +1927,7 @@ const SettingsPage = () => {
 // ─── MAIN DASHBOARD + APP (Task #11) ─────────────────────────────────────────
 function MainDashboard() {
   const { settings } = useContext(SettingsCtx);
+  const { theme }    = useTheme();
   const [view, setView]   = useState('overview');
   const [open, setOpen]   = useState(true);
 
@@ -1864,35 +1956,35 @@ function MainDashboard() {
   };
 
   return (
-    <>
-      <GlobalStyles />
-      <div style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:'var(--bg-base)' }}>
-        <TopBar onToggleSidebar={() => setOpen(o => !o)} />
-        <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
-          <Sidebar current={view} onNav={setView} open={open} />
-          <main className="scroll" style={{ flex:1, overflowY:'auto', padding: settings.compactMode ? 16 : 28 }}>
-            <div style={{ maxWidth:1600, margin:'0 auto' }}>
-              {renderContent()}
-            </div>
-          </main>
-        </div>
+    <div data-theme={theme} style={{ display:'flex', flexDirection:'column', height:'100vh', overflow:'hidden', background:'var(--bg-base)' }}>
+      <TopBar onToggleSidebar={() => setOpen(o => !o)} />
+      <div style={{ display:'flex', flex:1, overflow:'hidden' }}>
+        <Sidebar current={view} onNav={setView} open={open} />
+        <main className="scroll" style={{ flex:1, overflowY:'auto', padding: settings.compactMode ? 16 : 28 }}>
+          <div style={{ maxWidth:1600, margin:'0 auto' }}>
+            {renderContent()}
+          </div>
+        </main>
       </div>
-    </>
+    </div>
   );
 }
 
 export default function App() {
   const [settings, dispatch] = useReducer(settingsReducer, initialSettings);
   return (
-    <SettingsCtx.Provider value={{ settings, dispatch }}>
-      <AuthProvider>
-        <ToastProvider>
-          <ApiProvider>
-            <AuthGate />
-          </ApiProvider>
-        </ToastProvider>
-      </AuthProvider>
-    </SettingsCtx.Provider>
+    <ThemeProvider>
+      <SettingsCtx.Provider value={{ settings, dispatch }}>
+        <AuthProvider>
+          <ToastProvider>
+            <ApiProvider>
+              <GlobalStyles />
+              <AuthGate />
+            </ApiProvider>
+          </ToastProvider>
+        </AuthProvider>
+      </SettingsCtx.Provider>
+    </ThemeProvider>
   );
 }
 
