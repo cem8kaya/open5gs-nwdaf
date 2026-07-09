@@ -612,3 +612,73 @@ void NwdafServer::handleMetrics(const httplib::Request&, httplib::Response& res)
     res.set_content(out.str(), "text/plain; version=0.0.4; charset=utf-8");
     res.status = 200;
 }
+
+// ── Traffic Simulator Handlers ────────────────────────────────────────────────
+
+void NwdafServer::handleTrafficStart(const httplib::Request& req, httplib::Response& res) {
+    try {
+        auto body = nlohmann::json::parse(req.body);
+        std::string type = body.value("type", "unknown");
+        int duration = body.value("duration", 30);
+
+        std::lock_guard<std::mutex> lock(traffic_mutex_);
+        if (traffic_running_) {
+            res.set_content(errorResponse(400, "Conflict", "Traffic already running").dump(), "application/problem+json");
+            return;
+        }
+        traffic_running_ = true;
+        current_traffic_task_ = type;
+
+        // Spawn a detached thread to run the simulation
+        std::thread([this, type, duration]() {
+            int ret = 0;
+            if (type == "download") {
+                ret = std::system("wget -qO /dev/null http://speedtest.tele2.net/100MB.zip &");
+            } else if (type == "upload_flood") {
+                ret = std::system("ping -f -c 1000 8.8.8.8 > /dev/null 2>&1 &");
+            } else if (type == "ping") {
+                ret = std::system("ping -c 30 8.8.8.8 > /dev/null 2>&1 &");
+            } else if (type == "signaling_storm") {
+                // simulate
+            }
+            (void)ret;
+            std::this_thread::sleep_for(std::chrono::seconds(duration));
+            std::lock_guard<std::mutex> lock(traffic_mutex_);
+            traffic_running_ = false;
+            current_traffic_task_ = "none";
+        }).detach();
+
+        nlohmann::json response = {
+            {"message", "Traffic simulation started"},
+            {"type", type},
+            {"duration", duration}
+        };
+        res.set_content(response.dump(), "application/json");
+    } catch (...) {
+        res.set_content(errorResponse(400, "Bad Request", "Invalid JSON body").dump(), "application/problem+json");
+    }
+}
+
+void NwdafServer::handleTrafficStop(const httplib::Request& req, httplib::Response& res) {
+    (void)req;
+    std::lock_guard<std::mutex> lock(traffic_mutex_);
+    traffic_running_ = false;
+    current_traffic_task_ = "none";
+    
+    // Attempt to kill commonly used tools in simulation
+    int ret = std::system("killall -q ping wget || true");
+    (void)ret;
+    
+    nlohmann::json response = { {"message", "Traffic simulation stopped"} };
+    res.set_content(response.dump(), "application/json");
+}
+
+void NwdafServer::handleTrafficStatus(const httplib::Request& req, httplib::Response& res) {
+    (void)req;
+    std::lock_guard<std::mutex> lock(traffic_mutex_);
+    nlohmann::json response = {
+        {"running", traffic_running_},
+        {"current_task", current_traffic_task_}
+    };
+    res.set_content(response.dump(), "application/json");
+}
