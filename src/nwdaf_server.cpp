@@ -4,6 +4,9 @@
 #include <random>
 #include <sstream>
 #include <iomanip>
+#include <thread>
+#include <chrono>
+#include <cstdlib>
 
 NwdafServer::NwdafServer(NwdafAnalyticsEngine& engine,
                          NwdafSubscriptionStore& subs,
@@ -145,6 +148,22 @@ void NwdafServer::setupRoutes() {
     svr_->Get("/nwdaf-analytics/v1/ready",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleReady(req, res);
+        });
+
+    // Traffic simulator endpoints
+    svr_->Post("/nwdaf-analytics/v1/traffic/start",
+        [this](const httplib::Request& req, httplib::Response& res) {
+            handleTrafficStart(req, res);
+        });
+
+    svr_->Post("/nwdaf-analytics/v1/traffic/stop",
+        [this](const httplib::Request& req, httplib::Response& res) {
+            handleTrafficStop(req, res);
+        });
+
+    svr_->Get("/nwdaf-analytics/v1/traffic/status",
+        [this](const httplib::Request& req, httplib::Response& res) {
+            handleTrafficStatus(req, res);
         });
 }
 

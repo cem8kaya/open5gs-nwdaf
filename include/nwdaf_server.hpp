@@ -49,6 +49,11 @@ private:
     void handleListSubscriptions(const httplib::Request&, httplib::Response&);
     void handleTrainModel(const httplib::Request&, httplib::Response&);
     void handleMetrics(const httplib::Request&, httplib::Response&);  // PROD-03
+    
+    // Traffic simulator endpoints
+    void handleTrafficStart(const httplib::Request&, httplib::Response&);
+    void handleTrafficStop(const httplib::Request&, httplib::Response&);
+    void handleTrafficStatus(const httplib::Request&, httplib::Response&);
 
     NwdafAnalyticsEngine&   engine_;
     NwdafSubscriptionStore& subs_;
@@ -61,4 +66,9 @@ private:
     mutable std::mutex              metrics_mutex_;
     std::map<std::string, uint64_t> analytics_request_counts_;
     NwdafMetricsCache               metrics_cache_;
+
+    // Traffic simulator state
+    std::mutex  traffic_mutex_;
+    bool        traffic_running_{false};
+    std::string current_traffic_task_{"none"};
 };

@@ -1709,13 +1709,14 @@ const SubscriptionsPage = () => {
 
 // ─── TRAFFIC GENERATOR PAGE (Task #9) ────────────────────────────────────────
 const TrafficGenerator = () => {
+  const api = useApi();
   const [status,  setStatus]  = useState({ running:false, current_task:'none' });
   const [form,    setForm]    = useState({ type:'download', duration:30 });
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState(null);
 
   const pollStatus = async () => {
-    try { const r = await fetch('/api/traffic/status'); if (r.ok) setStatus(await r.json()); } catch {}
+    try { const data = await api.get('/traffic/status'); setStatus(data); } catch {}
   };
 
   useEffect(() => { pollStatus(); const iv = setInterval(pollStatus, 3000); return () => clearInterval(iv); }, []);
@@ -1723,16 +1724,14 @@ const TrafficGenerator = () => {
   const start = async e => {
     e.preventDefault(); setLoading(true); setError(null);
     try {
-      const r = await fetch('/api/traffic/start', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ type:form.type, duration:+form.duration }) });
-      const d = await r.json();
-      if (!r.ok) throw new Error(d.message || 'Error starting traffic');
+      await api.post('/traffic/start', { type:form.type, duration:+form.duration });
       pollStatus();
     } catch (e) { setError(e.message); } finally { setLoading(false); }
   };
 
   const stop = async () => {
     setLoading(true);
-    try { const r = await fetch('/api/traffic/stop',{method:'POST'}); const d = await r.json(); if (!r.ok) throw new Error(d.message); pollStatus(); }
+    try { await api.post('/traffic/stop'); pollStatus(); }
     catch (e) { setError(e.message); } finally { setLoading(false); }
   };
 
