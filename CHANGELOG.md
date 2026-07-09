@@ -46,8 +46,7 @@ Open5GS ecosystem, written in modern C++17.
   `-fstack-protector-strong`, PIE, full RELRO.
 
 **Tooling & deployment**
-- React + Recharts "NWDAF Intelligence" web dashboard, Grafana dashboard JSON,
-  and Jupyter operations notebooks.
+- React + Recharts "NWDAF Intelligence" web dashboard and Grafana dashboard JSON.
 - Reproducible multi-stage Docker build (Ubuntu 22.04) and a systemd unit.
 - 85 Catch2 test cases (unit + integration) with a mock Open5GS environment.
 - GitHub Actions CI: Ubuntu 22.04 and 20.04 build matrix (full / minimal

@@ -270,7 +270,6 @@ Optional dependencies degrade gracefully: no MongoDB driver → subscriber count
 
 - **NWDAF Intelligence web UI** ([`dashboard/`](dashboard/)) — React + Recharts single-page app with live throughput, NF health, anomaly detection, QoS sustainability, MOS/service experience, network performance scoring, subscription management, a traffic simulator, and light/dark themes.
 - **Grafana** ([`grafana/nwdaf_dashboard.json`](grafana/nwdaf_dashboard.json)) — import-ready dashboard fed by the Prometheus `/metrics` endpoint.
-- **Notebooks** ([`notebooks/`](notebooks/)) — Jupyter notebooks for lab daily-ops workflows and GCP deployment of the UI.
 
 ## 🧠 ML Internals
 
