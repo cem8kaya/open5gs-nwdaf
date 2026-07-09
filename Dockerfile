@@ -6,15 +6,17 @@ FROM ubuntu:22.04 AS builder
 # Prevent tzdata prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Pin all dependencies via apt-get
-# We install exactly what is needed for Open5GS NWDAF C++ component
+# Install build dependencies for the Open5GS NWDAF C++ component.
+# The base image tag (ubuntu:22.04) is the reproducibility anchor; exact apt
+# version pins are intentionally avoided because Ubuntu removes superseded
+# point versions from the archive, which breaks the build over time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential=12.9ubuntu3 \
-    cmake=3.22.1-1ubuntu1.22.04.2 \
-    pkg-config=0.29.2-1ubuntu3 \
-    libssl-dev=3.0.2-0ubuntu1.18 \
-    libsystemd-dev=249.11-0ubuntu3.12 \
-    libsqlite3-dev=3.37.2-2ubuntu0.3 \
+    build-essential \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    libsystemd-dev \
+    libsqlite3-dev \
     git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
