@@ -6,6 +6,7 @@
 
 **Standalone, 3GPP Release-17 compliant NWDAF that plugs into [Open5GS](https://open5gs.org) and brings native ML-driven analytics to your 5G core.**
 
+[![CI](https://github.com/cem8kaya/open5gs-nwdaf/actions/workflows/ci.yml/badge.svg)](https://github.com/cem8kaya/open5gs-nwdaf/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![3GPP Rel-17](https://img.shields.io/badge/3GPP-Release_17-green.svg)](https://www.3gpp.org/specifications-technologies/releases/release-17)

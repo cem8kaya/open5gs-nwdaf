@@ -1,0 +1,118 @@
+name: CI
+
+on:
+  push:
+    branches: [ main, "claude/**" ]
+  pull_request:
+  workflow_dispatch:
+
+# Cancel superseded runs on the same ref
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Ubuntu 22.04 (GitHub-hosted runner) ──────────────────────────────────────
+  build-2204:
+    name: Ubuntu 22.04 · ${{ matrix.profile }}
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: full
+            apt_optional: "libsystemd-dev libssl-dev libsqlite3-dev"
+            cmake_flags: "-DNWDAF_USE_SD_JOURNAL=ON -DNWDAF_USE_TLS=ON"
+          - profile: minimal
+            apt_optional: ""
+            cmake_flags: "-DNWDAF_USE_SD_JOURNAL=OFF -DNWDAF_USE_TLS=OFF"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential cmake git pkg-config ca-certificates \
+            ${{ matrix.apt_optional }}
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNWDAF_BUILD_TESTS=ON \
+            ${{ matrix.cmake_flags }}
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --timeout 120
+
+  # ── Ubuntu 20.04 (container — hosted 20.04 runners were retired) ──────────────
+  build-2004:
+    name: Ubuntu 20.04 · ${{ matrix.profile }}
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - profile: full
+            apt_optional: "libsystemd-dev libssl-dev libsqlite3-dev"
+            cmake_flags: "-DNWDAF_USE_SD_JOURNAL=ON -DNWDAF_USE_TLS=ON"
+          - profile: minimal
+            apt_optional: ""
+            cmake_flags: "-DNWDAF_USE_SD_JOURNAL=OFF -DNWDAF_USE_TLS=OFF"
+    env:
+      DEBIAN_FRONTEND: noninteractive
+    steps:
+      - name: Install base toolchain
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            build-essential git pkg-config ca-certificates \
+            python3 python3-pip \
+            ${{ matrix.apt_optional }}
+          # Focal ships CMake 3.16; the project requires >= 3.22 — install a newer one via pip.
+          pip3 install --no-cache-dir "cmake>=3.22"
+
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: |
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DNWDAF_BUILD_TESTS=ON \
+            ${{ matrix.cmake_flags }}
+
+      - name: Build
+        run: cmake --build build --parallel "$(nproc)"
+
+      - name: Test
+        working-directory: build
+        run: ctest --output-on-failure --timeout 120
+
+  # ── Docker image build ───────────────────────────────────────────────────────
+  docker:
+    name: Docker build
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: open5gs-nwdaf:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Verify binary is present in the image
+        run: docker run --rm --entrypoint test open5gs-nwdaf:ci -x /usr/local/bin/open5gs-nwdafd
