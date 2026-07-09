@@ -6,37 +6,32 @@ FROM ubuntu:22.04 AS builder
 # Prevent tzdata prompts
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Pin all dependencies via apt-get
-# We install exactly what is needed for Open5GS NWDAF C++ component
+# Install build dependencies for the Open5GS NWDAF C++ component.
+# The base image tag (ubuntu:22.04) is the reproducibility anchor; exact apt
+# version pins are intentionally avoided because Ubuntu removes superseded
+# point versions from the archive, which breaks the build over time.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential=12.9ubuntu3 \
-    cmake=3.22.1-1ubuntu1.22.04.2 \
-    pkg-config=0.29.2-1ubuntu3 \
-    libssl-dev=3.0.2-0ubuntu1.18 \
-    libsystemd-dev=249.11-0ubuntu3.12 \
-    libsqlite3-dev=3.37.2-2ubuntu0.3 \
+    build-essential \
+    cmake \
+    pkg-config \
+    libssl-dev \
+    libsystemd-dev \
+    libsqlite3-dev \
     git \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /src
 
-# Step 1: Pre-fetch dependencies to allow offline build
-# FetchContent works during CMake configure time.
-COPY CMakeLists.txt ./
-# Copy minimal directories to allow CMake to configure and fetch
-RUN mkdir -p src include tests config && \
-    touch src/main.cpp
-
-RUN cmake -S . -B build
-
-# Step 2: Copy actual source code
+# Copy the full source tree and build the daemon.
+# Tests are disabled for the image build — the runtime image only needs the
+# daemon binary. Dependencies are fetched via CMake FetchContent at configure time.
 COPY . /src
 
-# Step 3: Build the project fully offline
-# Network is not required here because FetchContent already downloaded deps
-RUN cmake -S . -B build && \
-    cmake --build build -j$(nproc)
+RUN cmake -S . -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DNWDAF_BUILD_TESTS=OFF && \
+    cmake --build build -j"$(nproc)"
 
 FROM ubuntu:22.04 AS runtime
 

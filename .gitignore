@@ -6,3 +6,16 @@ build/
 /opt/nwdaf/
 __pycache__/
 *.pyc
+
+# macOS
+.DS_Store
+._*
+
+# Archives / build artifacts that should not be committed
+*.tar.gz
+*.tgz
+*.zip
+
+# Editor / IDE
+.vscode/
+.idea/

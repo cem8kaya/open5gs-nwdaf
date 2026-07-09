@@ -6,6 +6,7 @@
 
 **Standalone, 3GPP Release-17 compliant NWDAF that plugs into [Open5GS](https://open5gs.org) and brings native ML-driven analytics to your 5G core.**
 
+[![CI](https://github.com/cem8kaya/open5gs-nwdaf/actions/workflows/ci.yml/badge.svg)](https://github.com/cem8kaya/open5gs-nwdaf/actions/workflows/ci.yml)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![C++17](https://img.shields.io/badge/C%2B%2B-17-00599C.svg?logo=cplusplus&logoColor=white)](https://isocpp.org/)
 [![3GPP Rel-17](https://img.shields.io/badge/3GPP-Release_17-green.svg)](https://www.3gpp.org/specifications-technologies/releases/release-17)
@@ -110,24 +111,50 @@ flowchart LR
 
 ## 🚀 Quick Start
 
-### Prerequisites (Ubuntu 20.04 / 22.04)
+> **Verified on CI:** Ubuntu 22.04 (full: sd-journal + TLS + SQLite) and Ubuntu 20.04 (sd-journal + SQLite, TLS off) — see the [CI workflow](.github/workflows/ci.yml).
+
+### Prerequisites
+
+**Toolchain (required):**
 
 ```bash
-sudo apt-get install -y \
-    cmake g++ git pkg-config \
-    libyaml-cpp-dev libspdlog-dev \
-    libssl-dev libsqlite3-dev libsystemd-dev \
-    libcatch2-dev
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    build-essential cmake git pkg-config ca-certificates
 ```
 
+- **CMake ≥ 3.22** is required. Ubuntu 22.04 satisfies this; **Ubuntu 20.04 ships CMake 3.16**, so install a newer one there (e.g. `pip3 install "cmake>=3.22,<4"` or the [Kitware APT repo](https://apt.kitware.com/)).
+- An **internet connection is needed on the first configure**: cpp-httplib, nlohmann/json, yaml-cpp, spdlog (and Catch2 for tests) are fetched automatically via CMake `FetchContent`. You do **not** need to install these from apt.
+
+**Optional feature dependencies** (each degrades gracefully if absent):
+
+```bash
+sudo apt-get install -y --no-install-recommends \
+    libsystemd-dev \    # journald collection      (NWDAF_USE_SD_JOURNAL=ON)
+    libssl-dev \        # TLS/mTLS on the SBI       (NWDAF_USE_TLS=ON, needs OpenSSL ≥ 3.0)
+    libsqlite3-dev \    # restart-safe persistence  (history_backend=sqlite)
+    libmongoc-dev libmongocxx-dev   # subscriber count via MongoDB
+```
+
+> **TLS needs OpenSSL ≥ 3.0** (Ubuntu 22.04+). On Ubuntu 20.04 (OpenSSL 1.1.1), build with `-DNWDAF_USE_TLS=OFF`.
+
 ### Build
+
+**Ubuntu 22.04+ (full features):**
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(nproc)
 ```
 
-Minimal build (no systemd journal, no TLS):
+**Ubuntu 20.04 (TLS off — OpenSSL 1.1.1):**
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNWDAF_USE_TLS=OFF
+cmake --build build --parallel $(nproc)
+```
+
+**Minimal build** (no journald, no TLS — e.g. non-systemd hosts or containers):
 
 ```bash
 cmake -S . -B build \
@@ -151,10 +178,14 @@ cd build && ctest --output-on-failure
 
 ### Docker
 
+The image is a multi-stage build on `ubuntu:22.04` (OpenSSL 3.0, so TLS-capable) and contains only the daemon binary and default config.
+
 ```bash
 docker build -t open5gs-nwdaf .
 docker run --rm -p 7779:7779 open5gs-nwdaf
 ```
+
+> To reach the SBI from outside the container, set `sbi_bind_address: "0.0.0.0"` in your config — the default `127.0.0.1` only listens inside the container. Mount your own config with `-v $(pwd)/config/nwdaf.yaml:/etc/open5gs/nwdaf.yaml`.
 
 ### Install as a systemd service
 
@@ -233,11 +264,12 @@ Everything deployment-specific lives in [`config/nwdaf.yaml`](config/nwdaf.yaml)
 
 Optional dependencies degrade gracefully: no MongoDB driver → subscriber count returns 0; no SQLite → in-memory history only.
 
+> **TLS note:** `NWDAF_USE_TLS=ON` requires **OpenSSL ≥ 3.0** (Ubuntu 22.04+). On Ubuntu 20.04 (OpenSSL 1.1.1), build with `-DNWDAF_USE_TLS=OFF`; sd-journal and SQLite are unaffected.
+
 ## 📊 Dashboard & Observability
 
 - **NWDAF Intelligence web UI** ([`dashboard/`](dashboard/)) — React + Recharts single-page app with live throughput, NF health, anomaly detection, QoS sustainability, MOS/service experience, network performance scoring, subscription management, a traffic simulator, and light/dark themes.
 - **Grafana** ([`grafana/nwdaf_dashboard.json`](grafana/nwdaf_dashboard.json)) — import-ready dashboard fed by the Prometheus `/metrics` endpoint.
-- **Notebooks** ([`notebooks/`](notebooks/)) — Jupyter notebooks for lab daily-ops workflows and GCP deployment of the UI.
 
 ## 🧠 ML Internals
 
