@@ -25,15 +25,16 @@ Every kind of contribution is valuable:
 
 ## Development setup
 
-### Prerequisites (Ubuntu 20.04 / 22.04)
+### Prerequisites
+
+Required toolchain (Ubuntu 22.04+; see the README for Ubuntu 20.04 notes):
 
 ```bash
-sudo apt-get install -y \
-    cmake g++ git pkg-config \
-    libyaml-cpp-dev libspdlog-dev \
-    libssl-dev libsqlite3-dev libsystemd-dev \
-    libcatch2-dev
+sudo apt-get install -y --no-install-recommends \
+    build-essential cmake git pkg-config ca-certificates
 ```
+
+Optional feature dependencies: `libsystemd-dev` (journald), `libssl-dev` (TLS — needs OpenSSL ≥ 3.0), `libsqlite3-dev` (persistence), `libmongoc-dev libmongocxx-dev` (MongoDB subscriber count). cpp-httplib, nlohmann/json, yaml-cpp, spdlog and Catch2 are fetched automatically via CMake `FetchContent` (needs internet on first configure) — do not install them from apt. CMake **≥ 3.22** is required.
 
 ### Build with tests
 
@@ -41,6 +42,8 @@ sudo apt-get install -y \
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNWDAF_BUILD_TESTS=ON
 cmake --build build --parallel $(nproc)
 ```
+
+> On Ubuntu 20.04 add `-DNWDAF_USE_TLS=OFF` (OpenSSL 1.1.1 is incompatible with cpp-httplib's TLS).
 
 ### Run the test suite
 

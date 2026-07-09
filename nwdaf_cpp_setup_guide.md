@@ -139,6 +139,16 @@ pkg-config --modversion libsystemd
 > to the `journalctl` subprocess path, which returns empty events on a machine
 > without Open5GS — which is exactly what the mock tests expect.
 
+### 3.3b TLS / OpenSSL note (important for Ubuntu 20.04)
+
+The SBI TLS/mTLS support (`NWDAF_USE_TLS`, **ON by default**) is built on
+cpp-httplib, which **requires OpenSSL ≥ 3.0**. Ubuntu 20.04 ships OpenSSL
+**1.1.1**, so a default build there fails to compile `nwdaf_server.cpp` with
+`#error Sorry, OpenSSL versions prior to 3.0.0 are not supported`.
+
+- **Ubuntu 20.04:** build with **`-DNWDAF_USE_TLS=OFF`** (all other features work).
+- **Ubuntu 22.04+ (OpenSSL 3.0):** TLS builds normally; install `libssl-dev`.
+
 ### 3.4 MongoDB C++ Driver (optional)
 
 MongoDB is used only for subscriber count (queries the `subscribers` collection
@@ -341,9 +351,12 @@ Watch the output panel — a successful build ends with:
 mkdir -p build && cd build
 
 # Configure — local dev (no sd-journal, no MongoDB required)
+# NOTE: -DNWDAF_USE_TLS=OFF is required on Ubuntu 20.04 — its OpenSSL is 1.1.1,
+# but cpp-httplib's TLS support needs OpenSSL >= 3.0 (Ubuntu 22.04+).
 cmake .. \
     -DCMAKE_BUILD_TYPE=Debug \
     -DNWDAF_USE_SD_JOURNAL=OFF \
+    -DNWDAF_USE_TLS=OFF \
     -DNWDAF_BUILD_TESTS=ON \
     -G Ninja
 
@@ -351,7 +364,7 @@ cmake .. \
 ninja -j4
 
 # Or with make:
-# cmake .. -DCMAKE_BUILD_TYPE=Debug -DNWDAF_USE_SD_JOURNAL=OFF
+# cmake .. -DCMAKE_BUILD_TYPE=Debug -DNWDAF_USE_SD_JOURNAL=OFF -DNWDAF_USE_TLS=OFF
 # make -j4
 
 cd ..

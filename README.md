@@ -111,24 +111,50 @@ flowchart LR
 
 ## 🚀 Quick Start
 
-### Prerequisites (Ubuntu 20.04 / 22.04)
+> **Verified on CI:** Ubuntu 22.04 (full: sd-journal + TLS + SQLite) and Ubuntu 20.04 (sd-journal + SQLite, TLS off) — see the [CI workflow](.github/workflows/ci.yml).
+
+### Prerequisites
+
+**Toolchain (required):**
 
 ```bash
-sudo apt-get install -y \
-    cmake g++ git pkg-config \
-    libyaml-cpp-dev libspdlog-dev \
-    libssl-dev libsqlite3-dev libsystemd-dev \
-    libcatch2-dev
+sudo apt-get update
+sudo apt-get install -y --no-install-recommends \
+    build-essential cmake git pkg-config ca-certificates
 ```
 
+- **CMake ≥ 3.22** is required. Ubuntu 22.04 satisfies this; **Ubuntu 20.04 ships CMake 3.16**, so install a newer one there (e.g. `pip3 install "cmake>=3.22,<4"` or the [Kitware APT repo](https://apt.kitware.com/)).
+- An **internet connection is needed on the first configure**: cpp-httplib, nlohmann/json, yaml-cpp, spdlog (and Catch2 for tests) are fetched automatically via CMake `FetchContent`. You do **not** need to install these from apt.
+
+**Optional feature dependencies** (each degrades gracefully if absent):
+
+```bash
+sudo apt-get install -y --no-install-recommends \
+    libsystemd-dev \    # journald collection      (NWDAF_USE_SD_JOURNAL=ON)
+    libssl-dev \        # TLS/mTLS on the SBI       (NWDAF_USE_TLS=ON, needs OpenSSL ≥ 3.0)
+    libsqlite3-dev \    # restart-safe persistence  (history_backend=sqlite)
+    libmongoc-dev libmongocxx-dev   # subscriber count via MongoDB
+```
+
+> **TLS needs OpenSSL ≥ 3.0** (Ubuntu 22.04+). On Ubuntu 20.04 (OpenSSL 1.1.1), build with `-DNWDAF_USE_TLS=OFF`.
+
 ### Build
+
+**Ubuntu 22.04+ (full features):**
 
 ```bash
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --parallel $(nproc)
 ```
 
-Minimal build (no systemd journal, no TLS):
+**Ubuntu 20.04 (TLS off — OpenSSL 1.1.1):**
+
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DNWDAF_USE_TLS=OFF
+cmake --build build --parallel $(nproc)
+```
+
+**Minimal build** (no journald, no TLS — e.g. non-systemd hosts or containers):
 
 ```bash
 cmake -S . -B build \
@@ -152,10 +178,14 @@ cd build && ctest --output-on-failure
 
 ### Docker
 
+The image is a multi-stage build on `ubuntu:22.04` (OpenSSL 3.0, so TLS-capable) and contains only the daemon binary and default config.
+
 ```bash
 docker build -t open5gs-nwdaf .
 docker run --rm -p 7779:7779 open5gs-nwdaf
 ```
+
+> To reach the SBI from outside the container, set `sbi_bind_address: "0.0.0.0"` in your config — the default `127.0.0.1` only listens inside the container. Mount your own config with `-v $(pwd)/config/nwdaf.yaml:/etc/open5gs/nwdaf.yaml`.
 
 ### Install as a systemd service
 
