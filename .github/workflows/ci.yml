@@ -20,6 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 22.04 ships OpenSSL 3.0, so TLS can be enabled here.
           - profile: full
             apt_optional: "libsystemd-dev libssl-dev libsqlite3-dev"
             cmake_flags: "-DNWDAF_USE_SD_JOURNAL=ON -DNWDAF_USE_TLS=ON"
@@ -38,10 +39,21 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DNWDAF_BUILD_TESTS=ON \
-            ${{ matrix.cmake_flags }}
+          # Retry to ride out transient GitHub download failures during
+          # CMake FetchContent (deps are fetched at configure time).
+          for i in 1 2 3; do
+            if cmake -S . -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DNWDAF_BUILD_TESTS=ON \
+                ${{ matrix.cmake_flags }}; then
+              exit 0
+            fi
+            echo "::warning::cmake configure attempt $i failed (likely transient FetchContent download); retrying"
+            rm -rf build
+            sleep $((i * 15))
+          done
+          echo "::error::cmake configure failed after 3 attempts"
+          exit 1
 
       - name: Build
         run: cmake --build build --parallel "$(nproc)"
@@ -59,9 +71,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # 20.04 ships OpenSSL 1.1.1, which cpp-httplib's TLS support does not
+          # accept (requires OpenSSL >= 3.0), so TLS is OFF here. sd-journal and
+          # SQLite are still exercised.
           - profile: full
-            apt_optional: "libsystemd-dev libssl-dev libsqlite3-dev"
-            cmake_flags: "-DNWDAF_USE_SD_JOURNAL=ON -DNWDAF_USE_TLS=ON"
+            apt_optional: "libsystemd-dev libsqlite3-dev"
+            cmake_flags: "-DNWDAF_USE_SD_JOURNAL=ON -DNWDAF_USE_TLS=OFF"
           - profile: minimal
             apt_optional: ""
             cmake_flags: "-DNWDAF_USE_SD_JOURNAL=OFF -DNWDAF_USE_TLS=OFF"
@@ -84,10 +99,21 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DNWDAF_BUILD_TESTS=ON \
-            ${{ matrix.cmake_flags }}
+          # Retry to ride out transient GitHub download failures during
+          # CMake FetchContent (deps are fetched at configure time).
+          for i in 1 2 3; do
+            if cmake -S . -B build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DNWDAF_BUILD_TESTS=ON \
+                ${{ matrix.cmake_flags }}; then
+              exit 0
+            fi
+            echo "::warning::cmake configure attempt $i failed (likely transient FetchContent download); retrying"
+            rm -rf build
+            sleep $((i * 15))
+          done
+          echo "::error::cmake configure failed after 3 attempts"
+          exit 1
 
       - name: Build
         run: cmake --build build --parallel "$(nproc)"

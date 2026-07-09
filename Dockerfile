@@ -23,22 +23,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /src
 
-# Step 1: Pre-fetch dependencies to allow offline build
-# FetchContent works during CMake configure time.
-COPY CMakeLists.txt ./
-# Copy minimal directories to allow CMake to configure and fetch
-RUN mkdir -p src include tests config && \
-    touch src/main.cpp
-
-RUN cmake -S . -B build
-
-# Step 2: Copy actual source code
+# Copy the full source tree and build the daemon.
+# Tests are disabled for the image build — the runtime image only needs the
+# daemon binary. Dependencies are fetched via CMake FetchContent at configure time.
 COPY . /src
 
-# Step 3: Build the project fully offline
-# Network is not required here because FetchContent already downloaded deps
-RUN cmake -S . -B build && \
-    cmake --build build -j$(nproc)
+RUN cmake -S . -B build \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DNWDAF_BUILD_TESTS=OFF && \
+    cmake --build build -j"$(nproc)"
 
 FROM ubuntu:22.04 AS runtime
 
