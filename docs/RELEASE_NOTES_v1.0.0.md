@@ -52,3 +52,5 @@ reports and 3GPP spec-compliance findings are equally welcome.
 
 **Thanks to the [Open5GS](https://open5gs.org) project** for the open-source 5G
 core that made this possible.
+
+Contact : tcckaya8@gmail.com
