@@ -2,6 +2,7 @@
 #include "nwdaf_config.hpp"
 #include "nwdaf_collector.hpp"
 #include "ml/isolation_forest.hpp"
+#include "ml/mos_estimator.hpp"
 #include <nlohmann/json.hpp>
 #include <shared_mutex>
 #include <string>
@@ -82,6 +83,12 @@ public:
     // PROD-04: hot-reload analytics config from SIGHUP handler
     void updateConfig(double anomaly_contamination);
 
+    // H1.4 DISPERSION: concentration statistics over a non-negative series.
+    // Gini is 0 for a perfectly even distribution and approaches 1 as a single
+    // element takes the whole mass. Both are public for direct unit testing.
+    static double giniCoefficient(std::vector<double> values);
+    static double coefficientOfVariation(const std::vector<double>& values);
+
 private:
     NwdafCollector& collector_;
     NwdafConfig     config_;
@@ -99,6 +106,10 @@ private:
     json qosSustainability(const std::string& supi, const std::string& start_ts, const std::string& end_ts);
     json serviceExperience(const std::string& supi, const std::string& start_ts, const std::string& end_ts);
     json networkPerformance(const std::string& supi, const std::string& start_ts, const std::string& end_ts);
+    // H1.4: Rel-17/18 catalogue completion
+    json smCongestion(const std::string& supi, const std::string& start_ts, const std::string& end_ts);
+    json redundantTransmission(const std::string& supi, const std::string& start_ts, const std::string& end_ts);
+    json dispersion(const std::string& supi, const std::string& start_ts, const std::string& end_ts);
 
     void loadModels();
     void saveModels();

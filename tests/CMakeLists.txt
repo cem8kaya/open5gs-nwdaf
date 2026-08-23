@@ -23,6 +23,7 @@ add_executable(nwdaf_tests
     test_collector.cpp
     test_analytics.cpp
     test_arch_improvements.cpp   # TIER-4 ARCH-01…ARCH-05 tests
+    test_h1_analytics.cpp        # H1.4 catalogue + H1.5 E-model MOS
 )
 target_include_directories(nwdaf_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
