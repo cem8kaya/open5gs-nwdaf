@@ -4,6 +4,63 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Horizon 1 of [`docs/ENHANCEMENT_PLAN_5G_6G.md`](docs/ENHANCEMENT_PLAN_5G_6G.md),
+first quick-wins batch: H1.4 (catalogue completion), H1.5 (service-experience
+model) and H1.6 (OpenAPI + conformance).
+
+### Added
+
+**Analytics (TS 23.288)**
+- `SM_CONGESTION` (§6.16) — session-management congestion control experience:
+  establishment failure ratio, control- and user-plane load, a four-level
+  congestion band and the §6.16 `smcceUeList` buckets.
+- `REDUNDANT_TRANSMISSION` (§6.12) — per-direction transmission experience,
+  variance, a per-time-slot series and a URLLC suitability verdict.
+- `DISPERSION` (§6.10) — data-volume dispersion (Gini, coefficient of
+  variation, top-decile share) and per-subscriber transaction dispersion
+  (Gini, HHI, ranked top talkers).
+
+**Service experience (H1.5)**
+- `MosEstimator`: an ITU-T G.107 E-model-style rating replacing the static
+  downlink step ladder. Calibrated to the ladder's own anchor points, so
+  existing dashboards and alert thresholds keep their meaning while the score
+  becomes continuous. `SERVICE_EXPERIENCE` now also returns the R-factor, a
+  per-impairment breakdown (throughput / loss / delay) and a per-session MOS.
+- Packet-loss and latency inputs are accepted but unset until PFCP usage
+  reporting (H1.3) lands; absent signals contribute zero impairment rather
+  than a guessed value.
+
+**Contract (H1.6)**
+- `docs/openapi/nwdaf-analytics-v1.yaml` — OpenAPI 3.0 description of the SBI.
+- `tests/test_openapi_conformance.cpp` — validates live responses from every
+  endpoint against that document, so the spec cannot drift from the code. The
+  validator is built on yaml-cpp, already a dependency; no new third-party
+  library was introduced.
+
+**Data collection**
+- SMF parser recognises `PDU_EST_FAILED`, the signal `SM_CONGESTION` needs.
+
+### Changed
+- `/health` advertises the engine's registered analytics IDs instead of a
+  duplicated literal list, so new IDs reach NF consumers and the NRF profile
+  automatically.
+- `SERVICE_EXPERIENCE` confidence is 78 when a throughput sample is available
+  and 40 when the estimator falls back to the step ladder, replacing the
+  previous fixed 75.
+
+### Fixed
+- An SMF line reading "PDU Session Establishment Reject" was counted as a
+  successful establishment, because the reject branch did not exist and the
+  success branch matched on a substring of it. Rejects are now matched first.
+- `MockNwdafCollector::setNfMetrics()` stored metrics that nothing ever read,
+  leaving every NF-load-dependent path untested. `collectNfLoad()` is now
+  virtual and the mock serves the injected metrics.
+
+### Test coverage
+- 118 test cases, up from 85.
+
 ## [1.0.0] — 2026-07-09
 
 First public release: a standalone, 3GPP Release-17 compliant **NWDAF** for the
