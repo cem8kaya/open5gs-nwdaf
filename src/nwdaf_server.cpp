@@ -3,6 +3,7 @@
 #include <nlohmann/json.hpp>
 #include <random>
 #include <sstream>
+#include <fstream>
 #include <iomanip>
 #include <thread>
 #include <chrono>
@@ -142,6 +143,13 @@ void NwdafServer::setupRoutes() {
     svr_->Get("/nwdaf-analytics/v1/metrics",
         [this](const httplib::Request& req, httplib::Response& res) {
             handleMetrics(req, res);
+        });
+
+    // H1.6: serve the published OpenAPI document so NF consumers can fetch
+    // the contract from the running instance, not just from the repository.
+    svr_->Get("/nwdaf-analytics/v1/openapi",
+        [this](const httplib::Request& req, httplib::Response& res) {
+            handleOpenApi(req, res);
         });
 
     // P2-5: Readiness endpoint
@@ -546,6 +554,28 @@ void NwdafServer::handleTrainModel(const httplib::Request& req, httplib::Respons
 }
 
 // PROD-03: Prometheus text-format metrics endpoint
+// H1.6: serve the OpenAPI document from disk. Read per request rather than
+// cached at startup so an operator can correct the spec without a restart;
+// the file is a few tens of KB and this endpoint is not on a hot path.
+void NwdafServer::handleOpenApi(const httplib::Request& req, httplib::Response& res) {
+    if (!applyRateLimit(rate_limiter_, req, res)) return;
+
+    std::ifstream in(config_.openapi_spec_path, std::ios::binary);
+    if (!in) {
+        spdlog::debug("OpenAPI document not readable at {}", config_.openapi_spec_path);
+        res.set_content(errorResponse(404, "Not Found",
+            "OpenAPI document is not installed on this instance; "
+            "see openapi_spec_path in the NWDAF configuration").dump(),
+            "application/problem+json");
+        res.status = 404;
+        return;
+    }
+    std::ostringstream buf;
+    buf << in.rdbuf();
+    res.set_content(buf.str(), "application/yaml");
+    res.status = 200;
+}
+
 void NwdafServer::handleMetrics(const httplib::Request&, httplib::Response& res) {
     auto [dl_kbps, ul_kbps] = engine_.getCurrentThroughput();
     auto nf_metrics          = engine_.getCurrentNfMetrics();

@@ -110,5 +110,10 @@ NwdafConfig NwdafConfig::load(const std::string& yaml_path) {
     // P1-4: OAuth 2.0
     cfg.oauth_enabled = n["oauth_enabled"] ? n["oauth_enabled"].as<bool>()        : false;
 
+    // H1.6: path to the OpenAPI document served from the SBI.
+    cfg.openapi_spec_path = n["openapi_spec_path"]
+        ? n["openapi_spec_path"].as<std::string>()
+        : "/etc/open5gs/openapi/nwdaf-analytics-v1.yaml";
+
     return cfg;
 }

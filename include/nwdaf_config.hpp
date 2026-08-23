@@ -63,4 +63,9 @@ public:
 
     // P1-4: OAuth 2.0 access-token auth
     bool oauth_enabled = false;
+
+    // H1.6: OpenAPI document served from GET /nwdaf-analytics/v1/openapi.
+    // Optional — when the file is absent the endpoint reports 404 and the rest
+    // of the SBI is unaffected, following the graceful-degradation convention.
+    std::string openapi_spec_path = "/etc/open5gs/openapi/nwdaf-analytics-v1.yaml";
 };

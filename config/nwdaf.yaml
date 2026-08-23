@@ -77,3 +77,8 @@ nwdaf:
   tls_cert_file: "/etc/open5gs/tls/nwdaf.pem"
   tls_key_file:  "/etc/open5gs/tls/nwdaf.key"
   tls_ca_file:   "/etc/open5gs/tls/ca.pem"   # optional — enables mTLS client verification
+
+  # H1.6: OpenAPI document served from GET /nwdaf-analytics/v1/openapi.
+  # Installed here by `make install`; if the file is missing the endpoint
+  # returns 404 and the rest of the SBI is unaffected.
+  openapi_spec_path: "/etc/open5gs/openapi/nwdaf-analytics-v1.yaml"

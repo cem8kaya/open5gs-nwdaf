@@ -187,6 +187,7 @@ static NwdafConfig confConfig() {
     cfg.anomaly_contamination = 0.10; cfg.anomaly_min_samples = 10;
     cfg.baseline_stddev_min_kbps = 0.5; cfg.ewma_alpha = 0.3;
     cfg.rate_limit_per_ip_rps = 0; cfg.rate_limit_global_rps = 0;  // no throttling here
+    cfg.openapi_spec_path = NWDAF_OPENAPI_SPEC;
     cfg.log_level = "warn"; cfg.log_file = "/tmp/nwdaf_conformance.log";
     return cfg;
 }
@@ -546,6 +547,59 @@ TEST_CASE("H1.6: the subscription lifecycle conforms") {
     auto removed = cli.Delete(("/nwdaf-analytics/v1/subscriptions/" + sub_id).c_str());
     REQUIRE(removed);
     REQUIRE(removed->status == 204);
+}
+
+TEST_CASE("H1.6: the SBI serves the published OpenAPI document") {
+    auto& f = fixture();
+    httplib::Client cli("127.0.0.1", CONF_PORT);
+    cli.set_connection_timeout(5);
+    cli.set_read_timeout(5);
+
+    auto res = cli.Get("/nwdaf-analytics/v1/openapi");
+    REQUIRE(res);
+    REQUIRE(res->status == 200);
+    REQUIRE(res->get_header_value("Content-Type") == "application/yaml");
+
+    // What is served must be the same contract the tests above validate
+    // against — not a stale copy that drifted from the repository.
+    const YAML::Node served = YAML::Load(res->body);
+    REQUIRE(served["openapi"].as<std::string>()
+            == f.spec.root()["openapi"].as<std::string>());
+    REQUIRE(served["info"]["version"].as<std::string>()
+            == f.spec.root()["info"]["version"].as<std::string>());
+    REQUIRE(served["components"]["schemas"].size()
+            == f.spec.root()["components"]["schemas"].size());
+    REQUIRE(served["x-analyticsDataSchemas"].size()
+            == NwdafAnalyticsEngine::VALID_ANALYTICS_IDS.size());
+}
+
+TEST_CASE("H1.6: a missing OpenAPI document degrades to 404, not a crash") {
+    // Optional-dependency convention: an absent file must not take the SBI
+    // down or return a 500.
+    NwdafConfig cfg = confConfig();
+    cfg.sbi_port = CONF_PORT + 1;
+    cfg.openapi_spec_path = "/nonexistent/nwdaf-openapi-should-not-exist.yaml";
+
+    MockNwdafCollector     collector(cfg);
+    NwdafAnalyticsEngine   engine(collector, cfg);
+    NwdafSubscriptionStore subs;
+    NwdafServer            server(engine, subs, cfg);
+    std::thread t([&]{ server.start(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(250));
+
+    httplib::Client cli("127.0.0.1", cfg.sbi_port);
+    cli.set_connection_timeout(5);
+    auto res = cli.Get("/nwdaf-analytics/v1/openapi");
+    REQUIRE(res);
+    REQUIRE(res->status == 404);
+
+    // The rest of the SBI keeps working.
+    auto health = cli.Get("/nwdaf-analytics/v1/health");
+    REQUIRE(health);
+    REQUIRE(health->status == 200);
+
+    server.stop();
+    if (t.joinable()) t.join();
 }
 
 // ── Error responses ──────────────────────────────────────────────────────────

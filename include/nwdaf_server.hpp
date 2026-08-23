@@ -49,6 +49,7 @@ private:
     void handleListSubscriptions(const httplib::Request&, httplib::Response&);
     void handleTrainModel(const httplib::Request&, httplib::Response&);
     void handleMetrics(const httplib::Request&, httplib::Response&);  // PROD-03
+    void handleOpenApi(const httplib::Request&, httplib::Response&);  // H1.6
     
     // Traffic simulator endpoints
     void handleTrafficStart(const httplib::Request&, httplib::Response&);
