@@ -67,7 +67,9 @@ public:
     std::vector<AmfEvent>      collectAmfEvents();
     std::vector<SmfEvent>      collectSmfEvents();
     ThroughputSample           collectUPFThroughput();
-    std::vector<NfMetric>      collectNfLoad();
+    // Virtual so tests can inject NF metrics: the real implementation shells
+    // out to systemctl, which is unavailable in a test environment.
+    virtual std::vector<NfMetric> collectNfLoad();
     int                        getSubscriberCount();
 
     void startBackgroundCollection();
@@ -97,6 +99,13 @@ protected:
 
     // BUG-01: injectable clock for testability
     virtual std::chrono::steady_clock::time_point getCpuNow() const;
+
+    // H1.4 test seam: append a throughput sample directly to the history ring,
+    // as bgLoop would. Analytics that need a multi-sample window (DISPERSION,
+    // REDUNDANT_TRANSMISSION) are otherwise only reachable by running the
+    // background loop for real time. Protected so no production API changes;
+    // MockNwdafCollector re-exposes it for tests.
+    void appendThroughputSample(const ThroughputSample& s);
 
     // BUG-01: rate-based CPU utilisation (callable by subclass test wrappers)
     double computeCpuPct(int pid);

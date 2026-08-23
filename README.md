@@ -38,7 +38,7 @@ The **NWDAF (Network Data Analytics Function)** is the intelligence layer of the
 
 | Capability | Details |
 |---|---|
-| 📊 **7 Analytics IDs** | NF load, UE mobility, UE communication, abnormal behaviour, QoS sustainability, service experience, network performance |
+| 📊 **10 Analytics IDs** | NF load, UE mobility, UE communication, abnormal behaviour, QoS sustainability, service experience, network performance, SM congestion, redundant transmission, dispersion |
 | 🤖 **Embedded ML** | Native C++ Isolation Forest (anomaly detection) + EWMA predictor (load forecasting), atomic model persistence, on-demand retraining via API |
 | 🔔 **Subscriptions** | `Nnwdaf_EventsSubscription` create/list/get/delete with push notification delivery (background notifier thread) |
 | 🗄️ **Persistence** | SQLite-backed throughput history and subscription store — survives restarts |
@@ -106,8 +106,30 @@ flowchart LR
 | `SERVICE_EXPERIENCE` | §6.4 | MOS estimation | ✅ Implemented |
 | `NETWORK_PERFORMANCE` | §6.6 | Weighted composite score | ✅ Implemented |
 | `QoS_SUSTAINABILITY` | §6.9 | Threshold trend analysis | ✅ Implemented |
+| `SM_CONGESTION` | §6.16 | Failure-ratio + NF-load bands | ✅ Implemented |
+| `REDUNDANT_TRANSMISSION` | §6.12 | Rate-stability estimator | ✅ Implemented |
+| `DISPERSION` | §6.10 | Gini / HHI concentration | ✅ Implemented |
+| `DN_PERFORMANCE` | §6.14 | — | ⬜ Planned (needs `Naf_EventExposure`) |
+| `SLICE_LOAD_LEVEL` | §6.3 | — | ⬜ Planned (needs S-NSSAI threading) |
+| `USER_DATA_CONGESTION` | §6.8 | — | ⬜ Planned (needs per-location input) |
+| `WLAN_PERFORMANCE` | §6.11 | — | ⬜ Planned (N3IWF-dependent) |
+
+**Known scope limits.** `SM_CONGESTION`, `REDUNDANT_TRANSMISSION` and
+`DISPERSION` each report what the current journald/procfs data path can
+actually observe and name the input they cannot yet see in a `note` field —
+per-path GTP-U counters, per-location cell data, and per-slice decomposition
+respectively. See [`docs/ENHANCEMENT_PLAN_5G_6G.md`](docs/ENHANCEMENT_PLAN_5G_6G.md)
+H1.1–H1.3 for the work that lifts those limits.
 
 **Referenced specifications:** TS 23.288 v17.3.0 (architecture) · TS 29.520 v17.7.0 (Nnwdaf services) · TS 29.510 v17.6.0 (NRF) · TS 28.554 v17.4.0 (KPIs) · TS 33.501 (security)
+
+### OpenAPI contract
+
+The SBI is published as an OpenAPI 3.0 document at
+[`docs/openapi/nwdaf-analytics-v1.yaml`](docs/openapi/nwdaf-analytics-v1.yaml).
+It is not documentation-by-hand: `tests/test_openapi_conformance.cpp` loads it
+and validates live responses from every endpoint against the declared schemas,
+so the spec and the implementation cannot drift apart without CI failing.
 
 ## 🚀 Quick Start
 
@@ -221,6 +243,12 @@ curl "http://127.0.0.1:7779/nwdaf-analytics/v1/analytics?analyticsId=NF_LOAD"
 # Anomaly detection
 curl "http://127.0.0.1:7779/nwdaf-analytics/v1/analytics?analyticsId=ABNORMAL_BEHAVIOUR"
 
+# Session-management congestion (TS 23.288 §6.16)
+curl "http://127.0.0.1:7779/nwdaf-analytics/v1/analytics?analyticsId=SM_CONGESTION"
+
+# Service experience — MOS with its G.107 impairment breakdown
+curl "http://127.0.0.1:7779/nwdaf-analytics/v1/analytics?analyticsId=SERVICE_EXPERIENCE"
+
 # Subscribe to events with push notifications
 curl -X POST "http://127.0.0.1:7779/nwdaf-analytics/v1/subscriptions" \
   -H "Content-Type: application/json" \
@@ -277,12 +305,13 @@ Optional dependencies degrade gracefully: no MongoDB driver → subscriber count
 |---|---|---|
 | **Isolation Forest** | `ABNORMAL_BEHAVIOUR` — flags throughput/behaviour outliers | Native C++ (~300 LoC), configurable contamination & seed, quality-gated retraining, atomic write-then-rename model persistence |
 | **EWMA Predictor** | `NF_LOAD` — short-horizon load forecasting | Exponentially weighted moving average with configurable α |
+| **E-model MOS estimator** | `SERVICE_EXPERIENCE` — mean opinion score | ITU-T G.107 transmission rating: `R = R0 − Id − Ie_eff`, with a Weber-Fechner throughput term, G.107 packet-loss weighting and the `Idd` delay curve. Reports the R-factor and a per-impairment breakdown; falls back to the legacy step ladder when no throughput sample is available |
 
 No Python runtime, no external ML framework — the entire inference path is in-process C++, which keeps the footprint small enough for edge and lab deployments.
 
 ## 🧪 Testing
 
-85 Catch2 test cases across four suites, including a **mock Open5GS environment** so the full pipeline can be tested without a running core:
+118 Catch2 test cases across six suites, including a **mock Open5GS environment** so the full pipeline can be tested without a running core:
 
 ```bash
 cmake -S . -B build -DNWDAF_BUILD_TESTS=ON
@@ -293,9 +322,11 @@ cd build && ctest --output-on-failure
 | Suite | Covers |
 |---|---|
 | `test_collector` | Data collection, parsing, interface stats |
-| `test_analytics` | All 7 analytics IDs, ML outputs, edge cases |
+| `test_analytics` | The original 7 analytics IDs, ML outputs, edge cases |
+| `test_h1_analytics` | E-model MOS calibration and the `SM_CONGESTION` / `REDUNDANT_TRANSMISSION` / `DISPERSION` analytics |
 | `test_server_integration` | SBI endpoints, subscriptions, auth, rate limiting |
 | `test_arch_improvements` | Persistence, TLS config, weights validation |
+| `test_openapi_conformance` | Every endpoint validated against the published OpenAPI schemas |
 
 ## 🗺 Roadmap
 

@@ -213,11 +213,10 @@ void NwdafServer::handleHealth(const httplib::Request& req, httplib::Response& r
             {"nfType",       "NWDAF"},
             {"nfInstanceId", config_.nf_instance_id},
             {"nwdafInfo", {
-                {"analyticsIds", {
-                    "NF_LOAD", "UE_MOBILITY", "UE_COMMUNICATION",
-                    "ABNORMAL_BEHAVIOUR", "QoS_SUSTAINABILITY",
-                    "SERVICE_EXPERIENCE", "NETWORK_PERFORMANCE"
-                }}
+                // H1.4: advertise the live catalogue rather than a duplicated
+                // literal list, so a new analytics ID is exposed to NF consumers
+                // (and the NRF profile) the moment it is registered.
+                {"analyticsIds", NwdafAnalyticsEngine::VALID_ANALYTICS_IDS}
             }}
         }}
     };

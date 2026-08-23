@@ -25,12 +25,19 @@ public:
     // BUG-01 test support: call the protected computeCpuPct directly
     double testComputeCpuPct(int pid);
 
+    // H1.4 test support: push a throughput sample straight into the history
+    // ring so window-based analytics can be exercised deterministically.
+    using NwdafCollector::appendThroughputSample;
+
 protected:
     std::vector<std::string>         readJournalLines(const std::string& unit, int n) override;
     std::pair<long,long>             readProcStat(int pid) override;
     long                             readProcMemKb(int pid) override;
     std::pair<uint64_t,uint64_t>     readNetStats(const std::string& iface) override;
     int                              querySubscriberCountFromMongo() override;
+    // Serves metrics supplied via setNfMetrics(); falls through to the real
+    // systemctl-backed implementation when none were injected.
+    std::vector<NfMetric>            collectNfLoad() override;
     std::chrono::steady_clock::time_point getCpuNow() const override;
 
 private:

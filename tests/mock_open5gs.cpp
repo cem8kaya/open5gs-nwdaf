@@ -59,6 +59,11 @@ std::pair<uint64_t,uint64_t> MockNwdafCollector::readNetStats(const std::string&
     return {rx + delta, tx + delta / 2};
 }
 
+std::vector<NfMetric> MockNwdafCollector::collectNfLoad() {
+    if (!mock_nf_metrics_.empty()) return mock_nf_metrics_;
+    return NwdafCollector::collectNfLoad();
+}
+
 int MockNwdafCollector::querySubscriberCountFromMongo() {
     return mock_subscriber_count_;
 }

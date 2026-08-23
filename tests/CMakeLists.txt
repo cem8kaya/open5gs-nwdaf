@@ -23,6 +23,7 @@ add_executable(nwdaf_tests
     test_collector.cpp
     test_analytics.cpp
     test_arch_improvements.cpp   # TIER-4 ARCH-01…ARCH-05 tests
+    test_h1_analytics.cpp        # H1.4 catalogue + H1.5 E-model MOS
 )
 target_include_directories(nwdaf_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -38,6 +39,7 @@ target_link_libraries(nwdaf_tests PRIVATE
 # other.  RESOURCE_LOCK ensures CTest serialises every test in this target.
 add_executable(nwdaf_integration_tests
     test_server_integration.cpp
+    test_openapi_conformance.cpp   # H1.6 OpenAPI contract test
 )
 target_include_directories(nwdaf_integration_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}
@@ -47,6 +49,11 @@ target_link_libraries(nwdaf_integration_tests PRIVATE
     nwdaf_mock
     nwdaf_lib
     Catch2::Catch2WithMain
+)
+# H1.6: the contract test reads the published OpenAPI document from the source
+# tree, so the spec and the code are checked against each other in CI.
+target_compile_definitions(nwdaf_integration_tests PRIVATE
+    NWDAF_OPENAPI_SPEC="${CMAKE_SOURCE_DIR}/docs/openapi/nwdaf-analytics-v1.yaml"
 )
 
 include(CTest)

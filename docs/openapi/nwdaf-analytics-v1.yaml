@@ -1,0 +1,730 @@
+openapi: 3.0.3
+
+# ─────────────────────────────────────────────────────────────────────────────
+# H1.6 — Service-Based Interface contract for the Open5GS NWDAF.
+#
+# This document describes the SBI *as actually served* by src/nwdaf_server.cpp,
+# not an aspirational surface. It is machine-checked: tests/test_openapi_
+# conformance.cpp parses this file and validates live responses against the
+# schemas below, so the spec cannot silently drift from the implementation.
+#
+# Alignment with 3GPP TS 29.520 is documented per-operation. Where this NWDAF
+# deviates (extra operational endpoints, a simplified analytics envelope), the
+# deviation is called out rather than papered over.
+# ─────────────────────────────────────────────────────────────────────────────
+
+info:
+  title: Open5GS NWDAF — Nnwdaf Analytics SBI
+  version: 1.1.0
+  description: |
+    Network Data Analytics Function service-based interface.
+
+    Analytics are served over two operations:
+
+      * `GET /nwdaf-analytics/v1/analytics` — query-parameter form, convenient
+        for operators, dashboards and `curl`.
+      * `POST /nnwdaf-analyticsinfo/v1/analytics` — the TS 29.520-aligned form
+        used by NF consumers, carrying DNN and S-NSSAI filters.
+
+    Both return the same envelope, with the analytics-specific payload under
+    `analData`.
+  license:
+    name: AGPL-3.0-or-later
+    url: https://www.gnu.org/licenses/agpl-3.0.en.html
+
+servers:
+  - url: http://{host}:{port}
+    description: Open5GS NWDAF SBI endpoint
+    variables:
+      host: { default: "127.0.0.1" }
+      port: { default: "7779" }
+
+tags:
+  - name: AnalyticsInfo
+    description: On-demand analytics retrieval (Nnwdaf_AnalyticsInfo).
+  - name: EventsSubscription
+    description: Analytics subscriptions with push notification.
+  - name: Operations
+    description: Health, readiness, metrics and model management.
+
+paths:
+
+  /nwdaf-analytics/v1/health:
+    get:
+      tags: [Operations]
+      summary: Liveness probe and NF profile
+      description: |
+        Returns the NF profile including the live analytics catalogue. The
+        `analyticsIds` list is generated from the engine's registered IDs, so
+        it always matches what the SBI will actually serve.
+      operationId: getHealth
+      responses:
+        '200':
+          description: The NWDAF is up.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthResponse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /nwdaf-analytics/v1/ready:
+    get:
+      tags: [Operations]
+      summary: Readiness probe
+      description: |
+        503 until the anomaly model is fitted. Distinct from `/health`: the
+        NWDAF is live but not yet serving trained analytics.
+      operationId: getReady
+      responses:
+        '200':
+          description: Models are fitted; analytics are fully available.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadyResponse' }
+        '503':
+          description: Still training — analytics fall back to rule-based mode.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadyResponse' }
+
+  /nwdaf-analytics/v1/analytics:
+    get:
+      tags: [AnalyticsInfo]
+      summary: Retrieve analytics (query-parameter form)
+      operationId: getAnalytics
+      parameters:
+        - name: analyticsId
+          in: query
+          required: true
+          schema: { $ref: '#/components/schemas/AnalyticsId' }
+        - name: supi
+          in: query
+          required: false
+          description: |
+            Subscriber filter. Rejected with 400 for `NF_LOAD`, which is
+            network-wide by construction.
+          schema: { type: string }
+        - name: startTs
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+        - name: endTs
+          in: query
+          required: false
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Analytics computed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyticsResponse' }
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '422':
+          description: Syntactically valid but unknown `analyticsId`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /nnwdaf-analyticsinfo/v1/analytics:
+    post:
+      tags: [AnalyticsInfo]
+      summary: Retrieve analytics (TS 29.520 form)
+      description: |
+        The NF-consumer-facing operation. Accepts DNN and S-NSSAI filters,
+        which are validated against this NWDAF's served slice and DNN — a
+        mismatch is a 400 rather than a silently ignored filter.
+      operationId: postAnalyticsInfo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/AnalyticsInfoRequest' }
+      responses:
+        '200':
+          description: Analytics computed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AnalyticsResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '422':
+          description: Unknown `analyticsId`.
+          content:
+            application/problem+json:
+              schema: { $ref: '#/components/schemas/ProblemDetails' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /nwdaf-analytics/v1/subscriptions:
+    post:
+      tags: [EventsSubscription]
+      summary: Create an analytics subscription
+      operationId: createSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/SubscriptionRequest' }
+      responses:
+        '201':
+          description: Subscription created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+    get:
+      tags: [EventsSubscription]
+      summary: List all subscriptions
+      operationId: listSubscriptions
+      responses:
+        '200':
+          description: All active subscriptions.
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/Subscription' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /nwdaf-analytics/v1/subscriptions/{subId}:
+    parameters:
+      - name: subId
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      tags: [EventsSubscription]
+      summary: Read one subscription
+      operationId: getSubscription
+      responses:
+        '200':
+          description: The subscription.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Subscription' }
+        '404': { $ref: '#/components/responses/NotFound' }
+    delete:
+      tags: [EventsSubscription]
+      summary: Delete a subscription
+      operationId: deleteSubscription
+      responses:
+        '204': { description: Deleted. }
+        '404': { $ref: '#/components/responses/NotFound' }
+
+  /nwdaf-analytics/v1/train:
+    post:
+      tags: [Operations]
+      summary: Force a model retrain
+      description: |
+        Always refits, regardless of current model state. Quality gates apply:
+        an insufficient sample count or too little traffic variance returns a
+        200 with a non-`trained` status rather than an error.
+      operationId: trainModel
+      responses:
+        '200':
+          description: Training ran, or was declined by a quality gate.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TrainResponse' }
+        '429': { $ref: '#/components/responses/TooManyRequests' }
+
+  /nwdaf-analytics/v1/metrics:
+    get:
+      tags: [Operations]
+      summary: Prometheus metrics
+      operationId: getMetrics
+      responses:
+        '200':
+          description: Metrics in Prometheus text exposition format.
+          content:
+            text/plain:
+              schema: { type: string }
+
+# Maps each analyticsId to the schema its `analData` payload must satisfy.
+# The conformance test reads this mapping, so registering a new analytics ID
+# means adding it here — the spec stays the single source of truth and a new
+# ID cannot ship without a documented contract.
+x-analyticsDataSchemas:
+  NF_LOAD:                '#/components/schemas/NfLoadData'
+  UE_MOBILITY:            '#/components/schemas/UeMobilityData'
+  UE_COMMUNICATION:       '#/components/schemas/UeCommunicationData'
+  ABNORMAL_BEHAVIOUR:     '#/components/schemas/AbnormalBehaviourData'
+  QoS_SUSTAINABILITY:     '#/components/schemas/QosSustainabilityData'
+  SERVICE_EXPERIENCE:     '#/components/schemas/ServiceExperienceData'
+  NETWORK_PERFORMANCE:    '#/components/schemas/NetworkPerformanceData'
+  SM_CONGESTION:          '#/components/schemas/SmCongestionData'
+  REDUNDANT_TRANSMISSION: '#/components/schemas/RedundantTransmissionData'
+  DISPERSION:             '#/components/schemas/DispersionData'
+
+components:
+
+  responses:
+    BadRequest:
+      description: Malformed or inapplicable request.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+    NotFound:
+      description: No such resource.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+    TooManyRequests:
+      description: Rate limit exceeded; see the `Retry-After` header.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+    InternalError:
+      description: Unhandled server-side failure.
+      content:
+        application/problem+json:
+          schema: { $ref: '#/components/schemas/ProblemDetails' }
+
+  schemas:
+
+    AnalyticsId:
+      type: string
+      description: |
+        The analytics catalogue this NWDAF serves. `QOS_SUSTAINABILITY` is
+        accepted on input and normalised to the canonical mixed-case
+        `QoS_SUSTAINABILITY`.
+      enum:
+        - NF_LOAD
+        - UE_MOBILITY
+        - UE_COMMUNICATION
+        - ABNORMAL_BEHAVIOUR
+        - QoS_SUSTAINABILITY
+        - SERVICE_EXPERIENCE
+        - NETWORK_PERFORMANCE
+        - SM_CONGESTION
+        - REDUNDANT_TRANSMISSION
+        - DISPERSION
+
+    ProblemDetails:
+      type: object
+      description: RFC 7807 problem document, as required by TS 29.500.
+      required: [type, title, status, detail]
+      properties:
+        type:   { type: string }
+        title:  { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        cause:  { type: string }
+
+    Snssai:
+      type: object
+      description: Single Network Slice Selection Assistance Information.
+      required: [sst]
+      properties:
+        sst: { type: integer, minimum: 0, maximum: 255 }
+        sd:  { type: string }
+
+    HealthResponse:
+      type: object
+      required: [status, nfType, nfInstanceId, ts, nfProfile]
+      properties:
+        status:       { type: string, enum: [UP] }
+        nfType:       { type: string, enum: [NWDAF] }
+        nfInstanceId: { type: string }
+        ts:           { type: string }
+        nfProfile:
+          type: object
+          required: [nfType, nfInstanceId, nwdafInfo]
+          properties:
+            nfType:       { type: string }
+            nfInstanceId: { type: string }
+            nwdafInfo:
+              type: object
+              required: [analyticsIds]
+              properties:
+                analyticsIds:
+                  type: array
+                  items: { $ref: '#/components/schemas/AnalyticsId' }
+
+    ReadyResponse:
+      type: object
+      required: [status]
+      properties:
+        status:  { type: string, enum: [READY, TRAINING] }
+        message: { type: string }
+
+    AnalyticsInfoRequest:
+      type: object
+      required: [analyticsId]
+      properties:
+        analyticsId: { $ref: '#/components/schemas/AnalyticsId' }
+        targetUeId:  { type: string }
+        supi:        { type: string }
+        dnn:         { type: string }
+        snssai:      { $ref: '#/components/schemas/Snssai' }
+        anaReq:
+          type: object
+          properties:
+            startTs: { type: string }
+            endTs:   { type: string }
+
+    AnalyticsResponse:
+      type: object
+      description: |
+        Common envelope for both analytics operations. `analData` carries the
+        per-analytics payload; its shape is one of the `*Data` schemas below,
+        selected by `analyticsId`.
+      required: [analyticsId, requestTime, timeStampGen, validity, confidence, analData]
+      properties:
+        analyticsId:  { $ref: '#/components/schemas/AnalyticsId' }
+        requestTime:  { type: string }
+        timeStampGen: { type: string }
+        validity:     { type: integer }
+        confidence:   { type: integer, minimum: 0, maximum: 100 }
+        analData:
+          type: object
+          required: [analyticsId, ts]
+          properties:
+            analyticsId: { $ref: '#/components/schemas/AnalyticsId' }
+            ts:          { type: string }
+            confidence:  { type: integer, minimum: 0, maximum: 100 }
+
+    SubscriptionRequest:
+      type: object
+      required: [analyticsId, notifUri]
+      properties:
+        analyticsId: { $ref: '#/components/schemas/AnalyticsId' }
+        notifUri:    { type: string }
+
+    Subscription:
+      type: object
+      required: [subId, analyticsId, notifUri, status, createdAt]
+      properties:
+        subId:       { type: string }
+        analyticsId: { type: string }
+        notifUri:    { type: string }
+        status:      { type: string }
+        createdAt:   { type: string }
+
+    TrainResponse:
+      type: object
+      required: [status]
+      properties:
+        status:     { type: string, enum: [trained, skipped, INSUFFICIENT_DATA, BASELINE_TOO_LOW] }
+        dataPoints: { type: integer }
+        nFeatures:  { type: integer }
+        required:   { type: integer }
+        message:    { type: string }
+        reason:     { type: string }
+        ts:         { type: string }
+
+    # ── Per-analytics payloads (the `analData` object) ───────────────────────
+    # The conformance test selects the schema by analyticsId and validates the
+    # live response against it.
+
+    NfLoadData:
+      type: object
+      required: [analyticsId, ts, nfLoadLevelList, overloadedNfs, recommendation, nfHealthSummary, confidence]
+      properties:
+        analyticsId:     { type: string, enum: [NF_LOAD] }
+        ts:              { type: string }
+        nfLoadLevelList:
+          type: array
+          items:
+            type: object
+            required: [nfType, nfStatus, nfLoadLevelInfo]
+            properties:
+              nfType:   { type: string }
+              nfStatus: { type: string }
+              nfLoadLevelInfo:
+                type: object
+                required: [nfLoadLevel, nfLoadLevelLabel, nfCpuUsage, nfMemoryUsage]
+                properties:
+                  nfLoadLevel:      { type: number, minimum: 0 }
+                  nfLoadLevelLabel: { type: string }
+                  nfCpuUsage:       { type: number }
+                  nfMemoryUsage:    { type: number }
+        overloadedNfs:   { type: array, items: { type: string } }
+        recommendation:  { type: string, enum: [STABLE, SCALE_OUT] }
+        nfHealthSummary: { type: string, enum: [HEALTHY, DEGRADED, CRITICAL] }
+        confidence:      { type: integer, minimum: 0, maximum: 100 }
+
+    UeMobilityData:
+      type: object
+      required: [analyticsId, ts, supi, registrationCount, deregistrationCount,
+                 handoverCount, authFailureCount, mobilityPattern, confidence]
+      properties:
+        analyticsId:         { type: string, enum: [UE_MOBILITY] }
+        ts:                  { type: string }
+        supi:                { type: string }
+        registrationCount:   { type: integer, minimum: 0 }
+        deregistrationCount: { type: integer, minimum: 0 }
+        handoverCount:       { type: integer, minimum: 0 }
+        authFailureCount:    { type: integer, minimum: 0 }
+        mobilityPattern:     { type: string, enum: [HIGH, LOW] }
+        confidence:          { type: integer, minimum: 0, maximum: 100 }
+
+    UeCommunicationData:
+      type: object
+      required: [analyticsId, ts, pduSessionEstCount, pduSessionRelCount,
+                 activePduSessions, totalSubscribers, currentDlKbps, currentUlKbps, confidence]
+      properties:
+        analyticsId:        { type: string, enum: [UE_COMMUNICATION] }
+        ts:                 { type: string }
+        pduSessionEstCount: { type: integer, minimum: 0 }
+        pduSessionRelCount: { type: integer, minimum: 0 }
+        activePduSessions:  { type: integer, minimum: 0 }
+        totalSubscribers:   { type: integer, minimum: 0 }
+        currentDlKbps:      { type: number, minimum: 0 }
+        currentUlKbps:      { type: number, minimum: 0 }
+        confidence:         { type: integer, minimum: 0, maximum: 100 }
+
+    # Three legitimate shapes: a scored network-wide result, the per-UE
+    # heuristic form, and a short form when a data-quality gate declined to
+    # score. Modelled as oneOf so each branch keeps a strict required list
+    # instead of weakening all of them to their intersection.
+    AbnormalBehaviourData:
+      oneOf:
+        - $ref: '#/components/schemas/AbnormalBehaviourScored'
+        - $ref: '#/components/schemas/AbnormalBehaviourPerUe'
+        - $ref: '#/components/schemas/AbnormalBehaviourDeclined'
+
+    AbnormalBehaviourScored:
+      type: object
+      required: [analyticsId, ts, anomalyDetected, anomalyPct, anomalyType,
+                 anomalyIndices, avgAnomalyScore, dataPoints, baselineDlStd, confidence]
+      properties:
+        analyticsId:     { type: string, enum: [ABNORMAL_BEHAVIOUR] }
+        ts:              { type: string }
+        anomalyDetected: { type: boolean }
+        anomalyPct:      { type: number, minimum: 0, maximum: 100 }
+        anomalyType:     { type: string }
+        anomalyIndices:  { type: array, items: { type: integer } }
+        avgAnomalyScore: { type: number }
+        dataPoints:      { type: integer, minimum: 0 }
+        baselineDlStd:   { type: number, minimum: 0 }
+        confidence:      { type: integer, minimum: 0, maximum: 100 }
+
+    AbnormalBehaviourPerUe:
+      type: object
+      required: [analyticsId, ts, supi, anomalyDetected, anomalyType,
+                 pduEstCount, pduRelCount, dataPoints, confidence]
+      properties:
+        analyticsId:     { type: string, enum: [ABNORMAL_BEHAVIOUR] }
+        ts:              { type: string }
+        supi:            { type: string }
+        anomalyDetected: { type: boolean }
+        anomalyType:     { type: string }
+        pduEstCount:     { type: integer, minimum: 0 }
+        pduRelCount:     { type: integer, minimum: 0 }
+        dataPoints:      { type: integer, minimum: 0 }
+        note:            { type: string }
+        confidence:      { type: integer, minimum: 0, maximum: 100 }
+
+    AbnormalBehaviourDeclined:
+      type: object
+      description: A data-quality gate declined to score this window.
+      required: [analyticsId, ts, anomalyDetected, reason, dataPoints, confidence]
+      properties:
+        analyticsId:     { type: string, enum: [ABNORMAL_BEHAVIOUR] }
+        ts:              { type: string }
+        anomalyDetected: { type: boolean }
+        reason:          { type: string, enum: [INSUFFICIENT_DATA, BASELINE_TOO_LOW] }
+        dataPoints:      { type: integer, minimum: 0 }
+        baselineDlStd:   { type: number, minimum: 0 }
+        confidence:      { type: integer, minimum: 0, maximum: 100 }
+
+    QosSustainabilityData:
+      type: object
+      required: [analyticsId, ts, currentDlKbps, currentUlKbps, predictedDlKbps,
+                 predictedUlKbps, dlTrend, ulTrend, violationRisk, sustainability, confidence]
+      properties:
+        analyticsId:     { type: string, enum: [QoS_SUSTAINABILITY] }
+        ts:              { type: string }
+        currentDlKbps:   { type: number, minimum: 0 }
+        currentUlKbps:   { type: number, minimum: 0 }
+        predictedDlKbps: { type: number }
+        predictedUlKbps: { type: number }
+        dlTrend:         { type: string, enum: [INCREASING, DECREASING, STABLE] }
+        ulTrend:         { type: string, enum: [INCREASING, DECREASING, STABLE] }
+        violationRisk:   { type: string, enum: [LOW, MEDIUM, HIGH] }
+        sustainability:  { type: string, enum: [SUSTAINABLE, UNSUSTAINABLE] }
+        confidence:      { type: integer, minimum: 0, maximum: 100 }
+
+    # H1.5 — E-model service experience.
+    ServiceExperienceData:
+      type: object
+      required: [analyticsId, ts, mosScore, mosCategory, mosMethod, rFactor,
+                 impairments, dlKbps, ulKbps, activeSessionRatio, confidence]
+      properties:
+        analyticsId: { type: string, enum: [SERVICE_EXPERIENCE] }
+        ts:          { type: string }
+        mosScore:    { type: number, minimum: 1, maximum: 4.5 }
+        mosCategory: { type: string, enum: [EXCELLENT, GOOD, FAIR, POOR] }
+        mosMethod:
+          type: string
+          description: |
+            `E_MODEL` when a throughput measurement was available;
+            `STEP_FALLBACK` when the estimator degraded to the legacy ladder.
+          enum: [E_MODEL, STEP_FALLBACK]
+        rFactor:     { type: number, minimum: 0, maximum: 100 }
+        impairments:
+          type: object
+          description: Per-factor attribution on the G.107 R-scale.
+          required: [throughput, loss, delay]
+          properties:
+            throughput: { type: number, minimum: 0 }
+            loss:       { type: number, minimum: 0 }
+            delay:      { type: number, minimum: 0 }
+        dlKbps:             { type: number, minimum: 0 }
+        ulKbps:             { type: number, minimum: 0 }
+        activeSessionRatio: { type: number, minimum: 0 }
+        perSessionKbps:     { type: number, minimum: 0 }
+        perSessionMos:      { type: number, minimum: 1, maximum: 4.5 }
+        activePduSessions:  { type: integer, minimum: 0 }
+        confidence:         { type: integer, minimum: 0, maximum: 100 }
+
+    NetworkPerformanceData:
+      type: object
+      required: [analyticsId, ts, overallScore, scoreLabel, grade, components, confidence]
+      properties:
+        analyticsId:  { type: string, enum: [NETWORK_PERFORMANCE] }
+        ts:           { type: string }
+        overallScore: { type: number, minimum: 0, maximum: 100 }
+        scoreLabel:   { type: string, enum: [EXCELLENT, GOOD, FAIR, POOR] }
+        grade:        { type: string, enum: [A, B, C, D] }
+        components:
+          type: object
+          required: [nfHealthScore, dlScore, pduScore]
+          properties:
+            nfHealthScore: { type: number, minimum: 0, maximum: 100 }
+            dlScore:       { type: number, minimum: 0, maximum: 100 }
+            pduScore:      { type: number, minimum: 0, maximum: 100 }
+        confidence:   { type: integer, minimum: 0, maximum: 100 }
+
+    # H1.4 — TS 23.288 §6.16 session-management congestion control experience.
+    SmCongestionData:
+      type: object
+      required: [analyticsId, ts, dnn, snssai, congestionLevel, sessionEstAttempts,
+                 sessionEstFailures, sessionEstFailureRatePct, sessionReleaseCount,
+                 cpLoadPct, upLoadPct, smcceUeList, recommendation, dataPoints, confidence]
+      properties:
+        analyticsId:     { type: string, enum: [SM_CONGESTION] }
+        ts:              { type: string }
+        dnn:             { type: string }
+        snssai:          { $ref: '#/components/schemas/Snssai' }
+        congestionLevel: { type: string, enum: [NONE, LOW, MEDIUM, HIGH] }
+        sessionEstAttempts:       { type: integer, minimum: 0 }
+        sessionEstFailures:       { type: integer, minimum: 0 }
+        sessionEstFailureRatePct: { type: number, minimum: 0, maximum: 100 }
+        sessionReleaseCount:      { type: integer, minimum: 0 }
+        cpLoadPct:       { type: number, minimum: 0 }
+        upLoadPct:       { type: number, minimum: 0 }
+        smcceUeList:
+          type: object
+          description: TS 23.288 §6.16 — UEs bucketed by observed congestion.
+          required: [highLevelCongestion, mediumLevelCongestion, lowLevelCongestion]
+          properties:
+            highLevelCongestion:   { type: array, items: { type: string } }
+            mediumLevelCongestion: { type: array, items: { type: string } }
+            lowLevelCongestion:    { type: array, items: { type: string } }
+        recommendation:
+          type: string
+          enum: [NONE, MONITOR_AND_PREPARE_SCALE_OUT, APPLY_BACKOFF_AND_SCALE_OUT]
+        dataPoints: { type: integer, minimum: 0 }
+        note:       { type: string }
+        confidence: { type: integer, minimum: 0, maximum: 100 }
+
+    # H1.4 — TS 23.288 §6.12 redundant transmission experience.
+    RedundantTransmissionData:
+      oneOf:
+        - $ref: '#/components/schemas/RedundantTransmissionScored'
+        - $ref: '#/components/schemas/RedundantTransmissionDeclined'
+
+    RedundantTransmissionScored:
+      type: object
+      required: [analyticsId, ts, snssai, redTransExp, redTransExpPerTS,
+                 reliabilityLevel, urllcSuitable, avgDlKbps, avgUlKbps,
+                 dataPoints, confidence]
+      properties:
+        analyticsId: { type: string, enum: [REDUNDANT_TRANSMISSION] }
+        ts:          { type: string }
+        snssai:      { $ref: '#/components/schemas/Snssai' }
+        redTransExp:
+          type: object
+          required: [avgDlRedTransExp, varDlRedTransExp, avgUlRedTransExp, varUlRedTransExp]
+          properties:
+            avgDlRedTransExp: { type: number, minimum: 0, maximum: 100 }
+            varDlRedTransExp: { type: number, minimum: 0 }
+            avgUlRedTransExp: { type: number, minimum: 0, maximum: 100 }
+            varUlRedTransExp: { type: number, minimum: 0 }
+        redTransExpPerTS:
+          type: array
+          items:
+            type: object
+            required: [slot, startTs, endTs, dlRedTransExp, ulRedTransExp]
+            properties:
+              slot:          { type: integer, minimum: 0 }
+              startTs:       { type: string }
+              endTs:         { type: string }
+              dlRedTransExp: { type: number, minimum: 0, maximum: 100 }
+              ulRedTransExp: { type: number, minimum: 0, maximum: 100 }
+        reliabilityLevel: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        urllcSuitable:    { type: boolean }
+        avgDlKbps:        { type: number, minimum: 0 }
+        avgUlKbps:        { type: number, minimum: 0 }
+        dataPoints:       { type: integer, minimum: 0 }
+        note:             { type: string }
+        confidence:       { type: integer, minimum: 0, maximum: 100 }
+
+    RedundantTransmissionDeclined:
+      type: object
+      description: Fewer than two samples in the window — nothing to rate.
+      required: [analyticsId, ts, reason, dataPoints, confidence]
+      properties:
+        analyticsId: { type: string, enum: [REDUNDANT_TRANSMISSION] }
+        ts:          { type: string }
+        reason:      { type: string, enum: [INSUFFICIENT_DATA] }
+        dataPoints:  { type: integer, minimum: 0 }
+        supi:        { type: string }
+        confidence:  { type: integer, minimum: 0, maximum: 100 }
+
+    # H1.4 — TS 23.288 §6.10 dispersion analytics.
+    DispersionData:
+      type: object
+      required: [analyticsId, ts, snssai, dataVolumeDispersion,
+                 transactionDispersion, dataPoints, confidence]
+      properties:
+        analyticsId: { type: string, enum: [DISPERSION] }
+        ts:          { type: string }
+        snssai:      { $ref: '#/components/schemas/Snssai' }
+        dataVolumeDispersion:
+          type: object
+          required: [giniCoefficient, coefficientOfVariation, topDecileSharePct,
+                     dispersionClass, samples]
+          properties:
+            giniCoefficient:        { type: number, minimum: 0, maximum: 1 }
+            coefficientOfVariation: { type: number, minimum: 0 }
+            topDecileSharePct:      { type: number, minimum: 0, maximum: 100 }
+            dispersionClass:        { type: string, enum: [LOW, MEDIUM, HIGH] }
+            samples:                { type: integer, minimum: 0 }
+        transactionDispersion:
+          type: object
+          required: [ueCount, totalTransactions, giniCoefficient, hhi,
+                     dispersionClass, topTalkers]
+          properties:
+            ueCount:           { type: integer, minimum: 0 }
+            totalTransactions: { type: integer, minimum: 0 }
+            giniCoefficient:   { type: number, minimum: 0, maximum: 1 }
+            hhi:               { type: number, minimum: 0, maximum: 1 }
+            dispersionClass:   { type: string, enum: [LOW, MEDIUM, HIGH] }
+            topTalkers:
+              type: array
+              items:
+                type: object
+                required: [supi, transactions, sharePct, dispersionClass]
+                properties:
+                  supi:            { type: string }
+                  transactions:    { type: integer, minimum: 0 }
+                  sharePct:        { type: number, minimum: 0, maximum: 100 }
+                  dispersionClass: { type: string, enum: [LOW, MEDIUM, HIGH] }
+        dataPoints: { type: integer, minimum: 0 }
+        note:       { type: string }
+        confidence: { type: integer, minimum: 0, maximum: 100 }

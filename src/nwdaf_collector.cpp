@@ -265,7 +265,17 @@ std::vector<SmfEvent> NwdafCollector::collectSmfEvents() {
         ev.raw_line = line;
         ev.timestamp_iso = nowISO();
 
-        if (line.find("PDU Session Establishment") != std::string::npos ||
+        // H1.4: session-establishment failures feed SM_CONGESTION. This branch
+        // must precede PDU_ESTABLISHED — a "PDU Session Establishment Reject"
+        // line contains "PDU Session Establishment" and would otherwise be
+        // miscounted as a successful establishment.
+        if (line.find("Establishment Reject") != std::string::npos ||
+            line.find("establishment reject") != std::string::npos ||
+            line.find("[Rejected]") != std::string::npos ||
+            line.find("Insufficient resources") != std::string::npos ||
+            line.find("No enough space") != std::string::npos)
+            ev.event_type = "PDU_EST_FAILED";
+        else if (line.find("PDU Session Establishment") != std::string::npos ||
             line.find("pdu session establish") != std::string::npos ||
             line.find("[Established]") != std::string::npos)
             ev.event_type = "PDU_ESTABLISHED";
@@ -541,6 +551,15 @@ void NwdafCollector::startBackgroundCollection() {
 void NwdafCollector::stopBackgroundCollection() {
     running_ = false;
     if (bg_thread_.joinable()) bg_thread_.join();
+}
+
+void NwdafCollector::appendThroughputSample(const ThroughputSample& s) {
+    std::lock_guard<std::mutex> lk(mutex_);
+    throughput_history_.push_back(s);
+    while ((int)throughput_history_.size() > config_.throughput_history_size)
+        throughput_history_.pop_front();
+    dl_ewma_.update(s.total_dl_kbps);
+    ul_ewma_.update(s.total_ul_kbps);
 }
 
 void NwdafCollector::bgLoop() {

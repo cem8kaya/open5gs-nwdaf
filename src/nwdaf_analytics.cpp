@@ -11,7 +11,9 @@
 const std::set<std::string> NwdafAnalyticsEngine::VALID_ANALYTICS_IDS = {
     "NF_LOAD", "UE_MOBILITY", "UE_COMMUNICATION",
     "ABNORMAL_BEHAVIOUR", "QoS_SUSTAINABILITY",
-    "SERVICE_EXPERIENCE", "NETWORK_PERFORMANCE"
+    "SERVICE_EXPERIENCE", "NETWORK_PERFORMANCE",
+    // H1.4 — Rel-17/18 catalogue completion
+    "SM_CONGESTION", "REDUNDANT_TRANSMISSION", "DISPERSION"
 };
 
 NwdafAnalyticsEngine::NwdafAnalyticsEngine(NwdafCollector& collector,
@@ -274,6 +276,10 @@ json NwdafAnalyticsEngine::compute(const std::string& analytics_id,
     if (analytics_id == "QoS_SUSTAINABILITY")  return qosSustainability(supi, start_ts, end_ts);
     if (analytics_id == "SERVICE_EXPERIENCE")  return serviceExperience(supi, start_ts, end_ts);
     if (analytics_id == "NETWORK_PERFORMANCE") return networkPerformance(supi, start_ts, end_ts);
+    // H1.4
+    if (analytics_id == "SM_CONGESTION")          return smCongestion(supi, start_ts, end_ts);
+    if (analytics_id == "REDUNDANT_TRANSMISSION") return redundantTransmission(supi, start_ts, end_ts);
+    if (analytics_id == "DISPERSION")             return dispersion(supi, start_ts, end_ts);
     throw std::invalid_argument("Unknown analyticsId: " + analytics_id);
 }
 
@@ -616,17 +622,6 @@ json NwdafAnalyticsEngine::serviceExperience(const std::string& supi,
     double dl_kbps = hist.empty() ? 0.0 : hist.back().total_dl_kbps;
     double ul_kbps = hist.empty() ? 0.0 : hist.back().total_ul_kbps;
 
-    double mos = 2.0;
-    if      (dl_kbps > 1000) mos = 4.5;
-    else if (dl_kbps > 500)  mos = 4.0;
-    else if (dl_kbps > 100)  mos = 3.5;
-    else if (dl_kbps > 50)   mos = 3.0;
-
-    std::string category = "POOR";
-    if      (mos > 4.0) category = "EXCELLENT";
-    else if (mos > 3.5) category = "GOOD";
-    else if (mos > 2.5) category = "FAIR";
-
     auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
     smf = filterSmfBySupi(smf, supi);
 
@@ -640,16 +635,46 @@ json NwdafAnalyticsEngine::serviceExperience(const std::string& supi,
                                    : (!smf.empty() ? 1 : 0);
     double ratio = (subscribers > 0) ? (double)active / subscribers : 0.0;
 
+    // H1.5: E-model-style MOS replaces the static DL-throughput step ladder.
+    // Packet-loss and latency inputs stay unset until PFCP usage reporting
+    // (H1.3) lands; the estimator applies zero impairment for absent signals
+    // and degrades to the original ladder when no throughput sample exists.
+    MosInputs mi;
+    mi.has_throughput  = !hist.empty();
+    mi.dl_kbps         = dl_kbps;
+    mi.ul_kbps         = ul_kbps;
+    mi.active_sessions = collector_.getActivePduSessionCount();
+
+    MosResult mr = MosEstimator::estimate(mi);
+
     json result = {
         {"analyticsId",      "SERVICE_EXPERIENCE"},
         {"ts",               nowISO()},
-        {"mosScore",         mos},
-        {"mosCategory",      category},
+        {"mosScore",         std::round(mr.mos * 100.0) / 100.0},
+        {"mosCategory",      mr.category},
+        {"mosMethod",        mr.method},
+        {"rFactor",          std::round(mr.r_factor * 10.0) / 10.0},
+        // Per-factor attribution — which impairment drove the score down.
+        {"impairments", {
+            {"throughput", std::round(mr.ie_throughput * 10.0) / 10.0},
+            {"loss",       std::round((mr.ie_effective - mr.ie_throughput) * 10.0) / 10.0},
+            {"delay",      std::round(mr.id_delay * 10.0) / 10.0}
+        }},
         {"dlKbps",           dl_kbps},
         {"ulKbps",           ul_kbps},
         {"activeSessionRatio", ratio},
-        {"confidence",       75}
+        {"confidence",       hist.empty() ? 40 : 78}
     };
+
+    // Per-subscriber view: the aggregate pipe shared across active PDU sessions.
+    // Reported alongside — not instead of — the aggregate score, so existing
+    // consumers of mosScore keep their meaning.
+    if (mr.per_session_available) {
+        result["perSessionKbps"] = std::round(mr.per_session_kbps * 10.0) / 10.0;
+        result["perSessionMos"]  = std::round(mr.per_session_mos * 100.0) / 100.0;
+        result["activePduSessions"] = mi.active_sessions;
+    }
+
     if (!supi.empty()) result["supi"] = supi;
     return result;
 }
@@ -705,4 +730,338 @@ json NwdafAnalyticsEngine::networkPerformance(const std::string&,
         }},
         {"confidence", 82}
     };
+}
+
+// ── H1.4 DISPERSION helpers ──────────────────────────────────────────────────
+
+// Gini coefficient over a non-negative series: 0 = perfectly even, → 1 as a
+// single element takes the whole mass. Uses the sorted-rank formulation.
+double NwdafAnalyticsEngine::giniCoefficient(std::vector<double> values) {
+    if (values.size() < 2) return 0.0;
+    for (auto& v : values) if (v < 0.0) v = 0.0;
+    std::sort(values.begin(), values.end());
+    double sum = std::accumulate(values.begin(), values.end(), 0.0);
+    if (sum <= 0.0) return 0.0;
+    const double n = (double)values.size();
+    double weighted = 0.0;
+    for (size_t i = 0; i < values.size(); ++i)
+        weighted += (double)(i + 1) * values[i];
+    double g = (2.0 * weighted) / (n * sum) - (n + 1.0) / n;
+    return std::clamp(g, 0.0, 1.0);
+}
+
+double NwdafAnalyticsEngine::coefficientOfVariation(const std::vector<double>& values) {
+    if (values.empty()) return 0.0;
+    double mean = std::accumulate(values.begin(), values.end(), 0.0) / values.size();
+    if (mean <= 0.0) return 0.0;
+    double var = 0.0;
+    for (double x : values) var += (x - mean) * (x - mean);
+    return std::sqrt(var / values.size()) / mean;
+}
+
+namespace {
+// Shared classifier for the dispersion/congestion bands below.
+std::string bandOf(double v, double low, double high) {
+    if (v >= high) return "HIGH";
+    if (v >= low)  return "MEDIUM";
+    return "LOW";
+}
+}  // namespace
+
+// ── SM_CONGESTION (TS 23.288 §6.16 — SM congestion control experience) ───────
+//
+// NOTE ON SCOPE: the enhancement plan's H1.4 table pairs the `SM_CONGESTION`
+// analytics ID with §6.8, but §6.8 is `USER_DATA_CONGESTION` — a distinct
+// analytic keyed on user-plane congestion at a location. `SM_CONGESTION` is
+// §6.16 and is about session-management congestion control (establishment
+// rejects, back-off). This implementation follows §6.16, which is what the
+// available SMF event data actually supports; `USER_DATA_CONGESTION` remains
+// an open catalogue item because it needs per-location (TA/cell) input.
+
+json NwdafAnalyticsEngine::smCongestion(const std::string& supi,
+                                         const std::string& start_ts,
+                                         const std::string& end_ts) {
+    auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
+    if (!supi.empty()) smf = filterSmfBySupi(smf, supi);
+
+    int established = 0, failed = 0, released = 0;
+    std::map<std::string, std::pair<int,int>> per_ue;  // supi → {attempts, failures}
+    for (const auto& e : smf) {
+        if (e.event_type == "PDU_ESTABLISHED") {
+            ++established;
+            if (!e.supi.empty()) { per_ue[e.supi].first++; }
+        } else if (e.event_type == "PDU_EST_FAILED") {
+            ++failed;
+            if (!e.supi.empty()) { per_ue[e.supi].first++; per_ue[e.supi].second++; }
+        } else if (e.event_type == "PDU_RELEASED") {
+            ++released;
+        }
+    }
+
+    int attempts = established + failed;
+    double failure_ratio = attempts > 0 ? 100.0 * failed / attempts : 0.0;
+
+    // Control-plane pressure: SMF and AMF load; user-plane pressure: UPF load.
+    auto metrics = collector_.getCachedNfMetrics();
+    if (metrics.empty()) metrics = collector_.collectNfLoad();
+    double smf_load = 0.0, upf_load = 0.0, amf_load = 0.0;
+    for (const auto& m : metrics) {
+        if      (m.nf_type == "SMF") smf_load = m.load_pct;
+        else if (m.nf_type == "UPF") upf_load = m.load_pct;
+        else if (m.nf_type == "AMF") amf_load = m.load_pct;
+    }
+    double cp_load = std::max(smf_load, amf_load);
+
+    // Congestion level: establishment failures dominate; NF load escalates a
+    // level on its own once an NF is saturated, since rejects lag saturation.
+    std::string level = "NONE";
+    if      (failure_ratio >= 20.0 || cp_load >= 80.0 || upf_load >= 80.0) level = "HIGH";
+    else if (failure_ratio >= 5.0  || cp_load >= 60.0 || upf_load >= 60.0) level = "MEDIUM";
+    else if (failure_ratio > 0.0   || cp_load >= 40.0 || upf_load >= 40.0) level = "LOW";
+
+    // TS 23.288 §6.16 smcceUeList — UEs bucketed by the congestion they saw.
+    json high_ues = json::array(), med_ues = json::array(), low_ues = json::array();
+    for (const auto& [ue, counts] : per_ue) {
+        int ue_attempts = counts.first, ue_failures = counts.second;
+        if (ue_failures == 0) continue;
+        double ue_ratio = ue_attempts > 0 ? 100.0 * ue_failures / ue_attempts : 0.0;
+        if      (ue_ratio >= 50.0) high_ues.push_back(ue);
+        else if (ue_ratio >= 20.0) med_ues.push_back(ue);
+        else                       low_ues.push_back(ue);
+    }
+
+    std::string recommendation = "NONE";
+    if      (level == "HIGH")   recommendation = "APPLY_BACKOFF_AND_SCALE_OUT";
+    else if (level == "MEDIUM") recommendation = "MONITOR_AND_PREPARE_SCALE_OUT";
+
+    json result = {
+        {"analyticsId", "SM_CONGESTION"},
+        {"ts",          nowISO()},
+        {"dnn",         config_.served_dnn},
+        {"snssai",      {{"sst", config_.served_snssai_sst},
+                         {"sd",  config_.served_snssai_sd}}},
+        {"congestionLevel",   level},
+        {"sessionEstAttempts", attempts},
+        {"sessionEstFailures", failed},
+        {"sessionEstFailureRatePct", std::round(failure_ratio * 10.0) / 10.0},
+        {"sessionReleaseCount", released},
+        {"cpLoadPct",   cp_load},
+        {"upLoadPct",   upf_load},
+        {"smcceUeList", {{"highLevelCongestion",   high_ues},
+                         {"mediumLevelCongestion", med_ues},
+                         {"lowLevelCongestion",    low_ues}}},
+        {"recommendation", recommendation},
+        {"dataPoints",  (int)smf.size()},
+        {"confidence",  (int)computeConfidence((int)smf.size(), 1, 100,
+                                               metrics.empty() ? 0.7 : 1.0)}
+    };
+    // The slice/DNN reported above is the NWDAF's single served slice from
+    // config; per-slice decomposition arrives with S-NSSAI threading (H1.2).
+    result["note"] = "Single-slice scope: analytics reflect the configured "
+                     "served S-NSSAI/DNN; per-slice decomposition requires "
+                     "S-NSSAI threading (H1.2).";
+    if (!supi.empty()) result["supi"] = supi;
+    return result;
+}
+
+// ── REDUNDANT_TRANSMISSION (TS 23.288 §6.12 — RED_TRANS_EXP) ─────────────────
+
+json NwdafAnalyticsEngine::redundantTransmission(const std::string& supi,
+                                                  const std::string& start_ts,
+                                                  const std::string& end_ts) {
+    auto hist = filterByWindow(collector_.getThroughputHistory(360), start_ts, end_ts);
+    int n = (int)hist.size();
+
+    if (n < 2) {
+        json r = {
+            {"analyticsId", "REDUNDANT_TRANSMISSION"},
+            {"ts",          nowISO()},
+            {"reason",      "INSUFFICIENT_DATA"},
+            {"dataPoints",  n},
+            {"confidence",  0}
+        };
+        if (!supi.empty()) r["supi"] = supi;
+        return r;
+    }
+
+    std::vector<double> dl, ul;
+    dl.reserve(n); ul.reserve(n);
+    for (const auto& s : hist) {
+        dl.push_back(s.total_dl_kbps);
+        ul.push_back(s.total_ul_kbps);
+    }
+
+    auto mean_of = [](const std::vector<double>& v) {
+        return std::accumulate(v.begin(), v.end(), 0.0) / v.size();
+    };
+    auto var_of = [&](const std::vector<double>& v) {
+        double m = mean_of(v), acc = 0.0;
+        for (double x : v) acc += (x - m) * (x - m);
+        return acc / v.size();
+    };
+
+    // Redundant-transmission experience is a delivery-success percentage in the
+    // spec. Without dual-path GTP-U counters we proxy it with per-direction
+    // rate stability: a steady rate implies packets are landing on schedule,
+    // a volatile one implies retransmission/reordering pressure.
+    auto experience = [&](const std::vector<double>& v) {
+        double cov = coefficientOfVariation(v);
+        return std::clamp(100.0 * (1.0 - std::min(1.0, cov)), 0.0, 100.0);
+    };
+
+    double dl_exp = experience(dl), ul_exp = experience(ul);
+    double dl_var = var_of(dl),     ul_var = var_of(ul);
+
+    // Per-time-slot experience (§6.12 redTransExpPerTS) — the window split into
+    // equal slots so a consumer can see when reliability dipped.
+    const int slots = std::min(6, n);
+    json per_ts = json::array();
+    for (int i = 0; i < slots; ++i) {
+        int lo = (int)((long)i * n / slots);
+        int hi = (int)((long)(i + 1) * n / slots);
+        if (hi <= lo) continue;
+        std::vector<double> d_slot(dl.begin() + lo, dl.begin() + hi);
+        std::vector<double> u_slot(ul.begin() + lo, ul.begin() + hi);
+        per_ts.push_back({
+            {"slot",           i},
+            {"startTs",        hist[lo].timestamp_iso},
+            {"endTs",          hist[hi - 1].timestamp_iso},
+            {"dlRedTransExp",  std::round(experience(d_slot) * 10.0) / 10.0},
+            {"ulRedTransExp",  std::round(experience(u_slot) * 10.0) / 10.0}
+        });
+    }
+
+    double worst = std::min(dl_exp, ul_exp);
+    std::string reliability = worst >= 95.0 ? "HIGH"
+                            : worst >= 80.0 ? "MEDIUM" : "LOW";
+    // URLLC needs a consistently high delivery ratio; anything volatile fails it.
+    bool urllc_suitable = worst >= 95.0;
+
+    json result = {
+        {"analyticsId", "REDUNDANT_TRANSMISSION"},
+        {"ts",          nowISO()},
+        {"snssai",      {{"sst", config_.served_snssai_sst},
+                         {"sd",  config_.served_snssai_sd}}},
+        {"redTransExp", {
+            {"avgDlRedTransExp", std::round(dl_exp * 10.0) / 10.0},
+            {"varDlRedTransExp", std::round(dl_var * 100.0) / 100.0},
+            {"avgUlRedTransExp", std::round(ul_exp * 10.0) / 10.0},
+            {"varUlRedTransExp", std::round(ul_var * 100.0) / 100.0}
+        }},
+        {"redTransExpPerTS",  per_ts},
+        {"reliabilityLevel",  reliability},
+        {"urllcSuitable",     urllc_suitable},
+        {"avgDlKbps",         std::round(mean_of(dl) * 10.0) / 10.0},
+        {"avgUlKbps",         std::round(mean_of(ul) * 10.0) / 10.0},
+        {"dataPoints",        n},
+        {"confidence",        (int)computeConfidence(n, 2, 360)},
+        {"note", "Experience is derived from per-direction rate stability: "
+                 "true per-path delivery ratios require dual-path GTP-U "
+                 "(N3/N9) counters, which the /sys/class/net data path cannot "
+                 "expose (gtp5g constraint). Superseded by PFCP usage "
+                 "reporting (H1.3)."}
+    };
+    if (!supi.empty()) {
+        result["supi"]         = supi;
+        result["supiFiltered"] = false;
+    }
+    return result;
+}
+
+// ── DISPERSION (TS 23.288 §6.10) ─────────────────────────────────────────────
+
+json NwdafAnalyticsEngine::dispersion(const std::string& supi,
+                                       const std::string& start_ts,
+                                       const std::string& end_ts) {
+    // ── DVDA: data-volume dispersion across the observation window ───────────
+    auto hist = filterByWindow(collector_.getThroughputHistory(360), start_ts, end_ts);
+    std::vector<double> volumes;
+    volumes.reserve(hist.size());
+    for (const auto& s : hist)
+        volumes.push_back(s.total_dl_kbps + s.total_ul_kbps);
+
+    double vol_gini = giniCoefficient(volumes);
+    double vol_cov  = coefficientOfVariation(volumes);
+
+    // Share of total volume carried by the busiest decile of samples — the
+    // concentration measure operators actually plan capacity against.
+    double top_decile_share = 0.0;
+    if (!volumes.empty()) {
+        std::vector<double> sorted = volumes;
+        std::sort(sorted.rbegin(), sorted.rend());
+        size_t top_n = std::max<size_t>(1, sorted.size() / 10);
+        double top_sum = std::accumulate(sorted.begin(), sorted.begin() + top_n, 0.0);
+        double all_sum = std::accumulate(sorted.begin(), sorted.end(), 0.0);
+        if (all_sum > 0.0) top_decile_share = 100.0 * top_sum / all_sum;
+    }
+
+    // ── TDA: transaction dispersion across subscribers ───────────────────────
+    auto amf = filterAmfByWindow(collector_.getRecentAmfEvents(500), start_ts, end_ts);
+    auto smf = filterSmfByWindow(collector_.getRecentSmfEvents(500), start_ts, end_ts);
+    if (!supi.empty()) {
+        amf = filterAmfBySupi(amf, supi);
+        smf = filterSmfBySupi(smf, supi);
+    }
+
+    std::map<std::string,int> tx_per_ue;
+    for (const auto& e : amf) if (!e.supi.empty()) ++tx_per_ue[e.supi];
+    for (const auto& e : smf) if (!e.supi.empty()) ++tx_per_ue[e.supi];
+
+    std::vector<double> tx_counts;
+    tx_counts.reserve(tx_per_ue.size());
+    for (const auto& [ue, c] : tx_per_ue) { (void)ue; tx_counts.push_back((double)c); }
+
+    double tx_gini = giniCoefficient(tx_counts);
+    double total_tx = std::accumulate(tx_counts.begin(), tx_counts.end(), 0.0);
+
+    // Herfindahl-Hirschman index over subscriber transaction shares.
+    double hhi = 0.0;
+    if (total_tx > 0.0)
+        for (double c : tx_counts) { double sh = c / total_tx; hhi += sh * sh; }
+
+    // Top talkers, ranked — the §6.10 "usage rank" idea applied to subscribers.
+    std::vector<std::pair<std::string,int>> ranked(tx_per_ue.begin(), tx_per_ue.end());
+    std::sort(ranked.begin(), ranked.end(),
+              [](const auto& a, const auto& b) { return a.second > b.second; });
+    json top_talkers = json::array();
+    for (size_t i = 0; i < ranked.size() && i < 5; ++i) {
+        double share = total_tx > 0.0 ? 100.0 * ranked[i].second / total_tx : 0.0;
+        top_talkers.push_back({
+            {"supi",            ranked[i].first},
+            {"transactions",    ranked[i].second},
+            {"sharePct",        std::round(share * 10.0) / 10.0},
+            {"dispersionClass", bandOf(share, 20.0, 40.0)}
+        });
+    }
+
+    json result = {
+        {"analyticsId",   "DISPERSION"},
+        {"ts",            nowISO()},
+        {"snssai",        {{"sst", config_.served_snssai_sst},
+                           {"sd",  config_.served_snssai_sd}}},
+        {"dataVolumeDispersion", {
+            {"giniCoefficient",        std::round(vol_gini * 1000.0) / 1000.0},
+            {"coefficientOfVariation", std::round(vol_cov * 1000.0) / 1000.0},
+            {"topDecileSharePct",      std::round(top_decile_share * 10.0) / 10.0},
+            {"dispersionClass",        bandOf(vol_gini, 0.2, 0.4)},
+            {"samples",                (int)volumes.size()}
+        }},
+        {"transactionDispersion", {
+            {"ueCount",           (int)tx_counts.size()},
+            {"totalTransactions", (int)total_tx},
+            {"giniCoefficient",   std::round(tx_gini * 1000.0) / 1000.0},
+            {"hhi",               std::round(hhi * 1000.0) / 1000.0},
+            {"dispersionClass",   bandOf(tx_gini, 0.2, 0.4)},
+            {"topTalkers",        top_talkers}
+        }},
+        {"dataPoints",  (int)volumes.size()},
+        {"confidence",  (int)computeConfidence((int)volumes.size(), 1, 360)},
+        {"note", "Dispersion is computed over the time and subscriber "
+                 "dimensions. The §6.10 location dimension (per-TA/per-cell "
+                 "ueDispersionType FIXED/CAMPER/TRAVELLER) needs cell-level "
+                 "input from Namf_EventExposure, which the journald data path "
+                 "does not carry (H1.1)."}
+    };
+    if (!supi.empty()) result["supi"] = supi;
+    return result;
 }
