@@ -4,11 +4,17 @@ All notable changes to this project are documented here.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] — 2026-08-23
 
-Horizon 1 of [`docs/ENHANCEMENT_PLAN_5G_6G.md`](docs/ENHANCEMENT_PLAN_5G_6G.md),
-first quick-wins batch: H1.4 (catalogue completion), H1.5 (service-experience
-model) and H1.6 (OpenAPI + conformance).
+First execution batch of **Horizon 1** from
+[`docs/ENHANCEMENT_PLAN_5G_6G.md`](docs/ENHANCEMENT_PLAN_5G_6G.md) §3 — the
+quick wins: H1.4 (catalogue completion), H1.5 (service-experience model) and
+H1.6 (OpenAPI + conformance).
+
+**Issues closed:** #27 (H1.5), #28 (H1.6).
+**Issue advanced:** #26 (H1.4) — three of six catalogue IDs delivered; the
+remainder stay blocked on the data-path work in #23, #24 and #25.
+**Epic:** #20.
 
 ### Added
 
@@ -34,6 +40,10 @@ model) and H1.6 (OpenAPI + conformance).
 
 **Contract (H1.6)**
 - `docs/openapi/nwdaf-analytics-v1.yaml` — OpenAPI 3.0 description of the SBI.
+- `GET /nwdaf-analytics/v1/openapi` serves that document from the running
+  instance, so NF consumers can fetch the contract without cloning the
+  repository. The path is configurable via `openapi_spec_path`; an absent file
+  yields a 404 and leaves the rest of the SBI unaffected.
 - `tests/test_openapi_conformance.cpp` — validates live responses from every
   endpoint against that document, so the spec cannot drift from the code. The
   validator is built on yaml-cpp, already a dependency; no new third-party
@@ -58,8 +68,19 @@ model) and H1.6 (OpenAPI + conformance).
   leaving every NF-load-dependent path untested. `collectNfLoad()` is now
   virtual and the mock serves the injected metrics.
 
+### Known limitations
+- `SM_CONGESTION`, `REDUNDANT_TRANSMISSION` and `DISPERSION` report what the
+  journald/procfs data path can observe and name the input they cannot yet see
+  in a `note` field: per-path GTP-U counters (#25), per-location cell data
+  (#23) and per-slice decomposition (#24) respectively.
+- The MOS estimator accepts packet-loss and latency inputs and is tested
+  against them, but nothing populates those inputs until PFCP usage reporting
+  (#25) lands. Until then only the throughput term is active in production.
+- Validating MOS against a labeled synthetic QoE set is deferred to the
+  evaluation harness in #34.
+
 ### Test coverage
-- 118 test cases, up from 85.
+- 120 test cases, up from 85.
 
 ## [1.0.0] — 2026-07-09
 

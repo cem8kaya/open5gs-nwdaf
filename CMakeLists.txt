@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22)
-project(open5gs-nwdaf VERSION 1.0.0 LANGUAGES CXX)
+project(open5gs-nwdaf VERSION 1.1.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -153,6 +153,9 @@ target_link_libraries(open5gs-nwdafd PRIVATE nwdaf_lib)
 
 install(TARGETS open5gs-nwdafd DESTINATION /usr/local/bin)
 install(FILES config/nwdaf.yaml DESTINATION /etc/open5gs)
+# H1.6: install the OpenAPI document where the SBI's default
+# openapi_spec_path expects it, so GET /openapi works out of the box.
+install(FILES docs/openapi/nwdaf-analytics-v1.yaml DESTINATION /etc/open5gs/openapi)
 install(FILES systemd/open5gs-nwdafd.service DESTINATION /etc/systemd/system)
 
 # ── Tests ──────────────────────────────────────────────────────────────────────

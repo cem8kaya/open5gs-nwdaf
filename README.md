@@ -126,7 +126,14 @@ H1.1–H1.3 for the work that lifts those limits.
 ### OpenAPI contract
 
 The SBI is published as an OpenAPI 3.0 document at
-[`docs/openapi/nwdaf-analytics-v1.yaml`](docs/openapi/nwdaf-analytics-v1.yaml).
+[`docs/openapi/nwdaf-analytics-v1.yaml`](docs/openapi/nwdaf-analytics-v1.yaml),
+and served from the running instance at `GET /nwdaf-analytics/v1/openapi` so NF
+consumers can fetch the contract without cloning the repository:
+
+```bash
+curl "http://127.0.0.1:7779/nwdaf-analytics/v1/openapi" -o nwdaf-openapi.yaml
+```
+
 It is not documentation-by-hand: `tests/test_openapi_conformance.cpp` loads it
 and validates live responses from every endpoint against the declared schemas,
 so the spec and the implementation cannot drift apart without CI failing.
@@ -226,6 +233,7 @@ Base URL: `http://<host>:7779`
 | `GET` | `/nwdaf-analytics/v1/health` | Liveness probe (returns `UP` immediately) |
 | `GET` | `/nwdaf-analytics/v1/ready` | Readiness probe (`READY` once ML models are fitted, `503` otherwise) |
 | `GET` | `/nwdaf-analytics/v1/metrics` | Prometheus metrics |
+| `GET` | `/nwdaf-analytics/v1/openapi` | The published OpenAPI 3.0 contract (`application/yaml`) |
 | `GET` | `/nwdaf-analytics/v1/analytics?analyticsId=<ID>` | Fetch analytics (`Nnwdaf_AnalyticsInfo`) |
 | `POST` | `/nnwdaf-analyticsinfo/v1/analytics` | Spec-compliant analytics request (POST body) |
 | `POST` | `/nwdaf-analytics/v1/subscriptions` | Create subscription (`Nnwdaf_EventsSubscription`) |
@@ -311,7 +319,7 @@ No Python runtime, no external ML framework — the entire inference path is in-
 
 ## 🧪 Testing
 
-118 Catch2 test cases across six suites, including a **mock Open5GS environment** so the full pipeline can be tested without a running core:
+120 Catch2 test cases across six suites, including a **mock Open5GS environment** so the full pipeline can be tested without a running core:
 
 ```bash
 cmake -S . -B build -DNWDAF_BUILD_TESTS=ON
@@ -330,12 +338,40 @@ cd build && ctest --output-on-failure
 
 ## 🗺 Roadmap
 
-- [ ] `SLICE_LOAD_LEVEL` analytics (TS 23.288 §6.3) with S-NSSAI awareness
-- [ ] MTLF / AnLF split (Rel-17 §5.1) — separate model training and inference services
-- [ ] `DN_PERFORMANCE` and `DISPERSION` analytics
-- [ ] Kubernetes Helm chart + horizontal scaling
-- [ ] OpenAPI 3.0 spec published from TS 29.520 YAML
-- [ ] Data lake export (Parquet) for offline model training
+Tracked against [`docs/ENHANCEMENT_PLAN_5G_6G.md`](docs/ENHANCEMENT_PLAN_5G_6G.md)
+and the [5G/6G enhancement plan project board](https://github.com/users/cem8kaya/projects/5).
+
+**Horizon 1 — Rel-17/18 completeness & data-path realism** ([#20](https://github.com/cem8kaya/open5gs-nwdaf/issues/20))
+
+- [x] `DISPERSION`, `SM_CONGESTION`, `REDUNDANT_TRANSMISSION` analytics ([#26](https://github.com/cem8kaya/open5gs-nwdaf/issues/26), partial)
+- [x] MOS / service-experience E-model upgrade ([#27](https://github.com/cem8kaya/open5gs-nwdaf/issues/27))
+- [x] OpenAPI 3.0 spec published + CI conformance test ([#28](https://github.com/cem8kaya/open5gs-nwdaf/issues/28))
+- [ ] Pluggable `IDataSource` ingestion — SBI / OAM backend ([#23](https://github.com/cem8kaya/open5gs-nwdaf/issues/23))
+- [ ] Slice awareness (S-NSSAI) + `SLICE_LOAD_LEVEL` (TS 23.288 §6.3) ([#24](https://github.com/cem8kaya/open5gs-nwdaf/issues/24))
+- [ ] PFCP usage reporting → per-UE / per-session analytics ([#25](https://github.com/cem8kaya/open5gs-nwdaf/issues/25))
+- [ ] `DN_PERFORMANCE` (§6.14) and `USER_DATA_CONGESTION` (§6.8) — both blocked on the above input paths
+
+**Horizon 2 — Data & ML platform maturity** ([#21](https://github.com/cem8kaya/open5gs-nwdaf/issues/21))
+
+- [ ] MTLF / AnLF split (Rel-17 §5.1) ([#29](https://github.com/cem8kaya/open5gs-nwdaf/issues/29))
+- [ ] Model registry, versioning and rollback ([#30](https://github.com/cem8kaya/open5gs-nwdaf/issues/30))
+- [ ] Drift detection + auto-retrain ([#31](https://github.com/cem8kaya/open5gs-nwdaf/issues/31))
+- [ ] Seasonality-aware forecasting — Holt-Winters / ONNX ([#32](https://github.com/cem8kaya/open5gs-nwdaf/issues/32))
+- [ ] ADRF + data lake / feature store, Parquet export ([#33](https://github.com/cem8kaya/open5gs-nwdaf/issues/33))
+- [ ] Evaluation harness + calibrated confidence ([#34](https://github.com/cem8kaya/open5gs-nwdaf/issues/34))
+- [ ] Per-feature anomaly attribution ([#35](https://github.com/cem8kaya/open5gs-nwdaf/issues/35))
+
+**Horizon 3 — 5G-Advanced → 6G readiness** ([#22](https://github.com/cem8kaya/open5gs-nwdaf/issues/22))
+
+- [ ] Closed-loop automation & intent layer ([#36](https://github.com/cem8kaya/open5gs-nwdaf/issues/36))
+- [ ] Energy efficiency & sustainability analytics ([#37](https://github.com/cem8kaya/open5gs-nwdaf/issues/37))
+- [ ] AI-native / federated learning coordinator ([#38](https://github.com/cem8kaya/open5gs-nwdaf/issues/38))
+- [ ] Network digital twin ([#39](https://github.com/cem8kaya/open5gs-nwdaf/issues/39))
+- [ ] ISAC data types ([#40](https://github.com/cem8kaya/open5gs-nwdaf/issues/40))
+- [ ] Kubernetes Helm chart + horizontal scaling ([#41](https://github.com/cem8kaya/open5gs-nwdaf/issues/41))
+
+**Unscheduled**
+
 - [ ] srsRAN / UERANSIM end-to-end CI pipeline
 
 ## 🤝 Contributing

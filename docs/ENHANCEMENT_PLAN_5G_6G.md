@@ -28,6 +28,36 @@ This plan is organized into **three horizons** and is explicitly dual-lens: ever
 
 ---
 
+## 1a. Execution status
+
+Tracked on the [5G/6G enhancement plan project board](https://github.com/users/cem8kaya/projects/5).
+Last updated **2026-08-23** (release `v1.1.0`).
+
+| Item | Issue | Status |
+|---|---|---|
+| H1.1 — Pluggable `IDataSource` ingestion | [#23](https://github.com/cem8kaya/open5gs-nwdaf/issues/23) | Not started |
+| H1.2 — Slice awareness + `SLICE_LOAD_LEVEL` | [#24](https://github.com/cem8kaya/open5gs-nwdaf/issues/24) | Not started |
+| H1.3 — PFCP usage reporting | [#25](https://github.com/cem8kaya/open5gs-nwdaf/issues/25) | Not started |
+| H1.4 — Rel-17/18 catalogue | [#26](https://github.com/cem8kaya/open5gs-nwdaf/issues/26) | **Partial** — `SM_CONGESTION`, `REDUNDANT_TRANSMISSION`, `DISPERSION` shipped; `DN_PERFORMANCE`, `USER_DATA_CONGESTION`, `WLAN_PERFORMANCE` blocked on H1.1–H1.3 |
+| H1.5 — MOS / service-experience E-model | [#27](https://github.com/cem8kaya/open5gs-nwdaf/issues/27) | **Done** |
+| H1.6 — OpenAPI 3.0 + conformance in CI | [#28](https://github.com/cem8kaya/open5gs-nwdaf/issues/28) | **Done** |
+| H2.x — MLOps platform | [#29](https://github.com/cem8kaya/open5gs-nwdaf/issues/29)–[#35](https://github.com/cem8kaya/open5gs-nwdaf/issues/35) | Not started |
+| H3.x — 6G readiness | [#36](https://github.com/cem8kaya/open5gs-nwdaf/issues/36)–[#41](https://github.com/cem8kaya/open5gs-nwdaf/issues/41) | Not started |
+
+**Against the H1 exit criteria:** analytics IDs 7 → **10** (target ≥11);
+OpenAPI-validated SBI ✅; slice-aware ✗; per-UE PFCP series ✗; SBI-mode
+ingestion ✗. H1.2 and H1.3 are the remaining blockers, and are the plan's own
+#1 and #2 backlog items.
+
+**Correction applied 2026-08-23:** the H1.4 table below originally paired the
+`SM_CONGESTION` analytics ID with §6.8. These are two distinct 3GPP analytics —
+`SM_CONGESTION` is §6.16 (session-management congestion control experience)
+while §6.8 is `USER_DATA_CONGESTION` (user-plane congestion by location). The
+implementation follows §6.16, which is what the available SMF event data
+supports; `USER_DATA_CONGESTION` is now listed separately as an open item.
+
+---
+
 ## 2. Current-state assessment
 
 ### 2.1 Strengths (keep and build on)
@@ -85,7 +115,7 @@ Thread **S-NSSAI** (SST/SD) through the data model, features, and API:
 
 This single change upgrades three analytics (`UE_COMMUNICATION`, `QoS_SUSTAINABILITY`, `SERVICE_EXPERIENCE`) from network-wide estimates to per-subscriber truth.
 
-### H1.4 — Complete the Rel-17/18 analytics catalogue **[TE]**
+### H1.4 — Complete the Rel-17/18 analytics catalogue **[TE]** — 🟡 partial (3 of 6 in v1.1.0)
 Prioritized by operator value:
 
 | Analytics ID | Spec | Effort | Notes |
@@ -93,14 +123,15 @@ Prioritized by operator value:
 | `SLICE_LOAD_LEVEL` | §6.3 | M | See H1.2 |
 | `DN_PERFORMANCE` | §6.14 | M | Needs AF/edge input (`Naf_EventExposure`) |
 | `DISPERSION` | §6.10 | M | Data volume/session dispersion — pure analytics on existing series |
-| `SM_CONGESTION` (User Data Congestion) | §6.8 | S | Reuses throughput + NF-load features |
+| `SM_CONGESTION` | §6.16 | S | SM congestion control experience — reuses SMF events + NF-load features |
+| `USER_DATA_CONGESTION` | §6.8 | M | Distinct from the above; needs per-location (TA/cell) input |
 | `REDUNDANT_TRANSMISSION` | §6.12 | S | URLLC use case |
 | `WLAN_PERFORMANCE` | §6.11 | L | Optional / N3IWF-dependent |
 
-### H1.5 — MOS/service-experience model upgrade **[DA]**
+### H1.5 — MOS/service-experience model upgrade **[DA]** — ✅ delivered in v1.1.0
 Replace the static DL-throughput ladder in `serviceExperience()` with an **ITU-T E-model-style estimator** (or a small regression trained on synthetic QoE data) that combines throughput, packet-loss/retransmission signals (from PFCP), latency proxy, and active-session ratio. Keep the step function as a fallback when inputs are missing.
 
-### H1.6 — OpenAPI 3.0 + conformance **[TE]**
+### H1.6 — OpenAPI 3.0 + conformance **[TE]** — ✅ delivered in v1.1.0
 Publish the SBI from the TS 29.520 YAML (already on the roadmap) and add a **contract test** in CI that validates responses against the schema. This is the cheapest credibility win for external NF consumers.
 
 **H1 exit criteria:** slice-aware analytics live; per-UE series from PFCP; ≥11 analytics IDs; OpenAPI-validated SBI; SBI-mode ingestion optional.
@@ -254,14 +285,14 @@ flowchart TB
 
 | KPI | Baseline (v1.0.0) | H1 target | H2 target |
 |---|---|---|---|
-| Analytics IDs implemented | 7 | ≥11 | ≥13 |
+| Analytics IDs implemented | 7 | ≥11 (**10 as of v1.1.0**) | ≥13 |
 | Per-UE analytics | ✗ | ✓ (PFCP) | ✓ |
 | Slice-aware | ✗ | ✓ | ✓ |
 | Anomaly precision/recall | unmeasured | measured | ≥0.9 / ≥0.85 on synthetic set |
 | Forecast error (sMAPE, NF_LOAD) | unmeasured | measured | ≤15% |
 | Automated retraining | manual only | scheduled | drift-triggered |
 | Confidence calibration | heuristic | — | calibrated (isotonic) |
-| SBI conformance | manual | OpenAPI-validated in CI | ✓ |
+| SBI conformance | manual | OpenAPI-validated in CI (**done, v1.1.0**) | ✓ |
 
 ---
 
